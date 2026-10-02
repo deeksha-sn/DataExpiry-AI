@@ -57,3 +57,64 @@ export interface HealthStatus {
   service: string;
   version?: string;
 }
+
+export interface PurposeMismatchResult {
+  record_id?: string | null;
+  category: string;
+  sensitivity: string;
+  collection_purpose: string;
+  current_usage: string;
+  purpose_mismatch: boolean;
+  risk_level: 'Low' | 'Medium' | 'High' | 'Critical' | string;
+  ai_recommendation: 'KEEP' | 'REVIEW' | 'ANONYMIZE' | 'DELETE' | string;
+  explanation: string;
+  analysis_mode: 'rule_based' | 'ai_assisted' | string;
+}
+
+export interface PurposeMismatchCheckRequest {
+  collection_purpose: string;
+  current_usage: string;
+  category?: string;
+  sensitivity?: string;
+  status?: string;
+  expiry_date?: string;
+}
+
+export interface BatchAIAnalysisResponse {
+  total_analyzed: number;
+  potential_mismatches: number;
+  records_requiring_review: number;
+  recommendations: {
+    KEEP: number;
+    REVIEW: number;
+    ANONYMIZE: number;
+    DELETE: number;
+  };
+  risk_breakdown: {
+    Critical: number;
+    High: number;
+    Medium: number;
+    Low: number;
+  };
+  records: PurposeMismatchResult[];
+}
+
+export interface AIGovernanceSummary {
+  total_records: number;
+  potential_mismatches: number;
+  records_requiring_review: number;
+  high_sensitivity_count: number;
+  recommendations: {
+    KEEP: number;
+    REVIEW: number;
+    ANONYMIZE: number;
+    DELETE: number;
+  };
+  risk_breakdown: {
+    Critical: number;
+    High: number;
+    Medium: number;
+    Low: number;
+  };
+  category_breakdown: Record<string, number>;
+}

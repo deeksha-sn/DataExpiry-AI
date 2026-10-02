@@ -1,7 +1,6 @@
 import json
 from typing import List, Union
-from pydantic import ConfigDict
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "DATAEXPIRY API"
@@ -23,7 +22,7 @@ class Settings(BaseSettings):
     # Future AI API Key placeholder
     AI_API_KEY: str = ""
 
-    model_config = ConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     def get_cors_origins(self) -> List[str]:
         if isinstance(self.CORS_ORIGINS, str):
