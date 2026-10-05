@@ -5,7 +5,10 @@ risk scoring, lifecycle recommendations (KEEP, REVIEW, ANONYMIZE, DELETE),
 and API endpoints.
 """
 
+import json
 import pytest
+from unittest.mock import patch, MagicMock
+import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -274,3 +277,247 @@ def test_api_batch_analyze_and_summary_endpoints():
     assert summary_data["total_records"] >= 2
     assert "potential_mismatches" in summary_data
     assert "recommendations" in summary_data
+
+
+# ==============================================================================
+# Unit & Integration Tests for Google Gemini Semantic AI Provider (Team Member 2)
+# ==============================================================================
+
+def make_mock_gemini_response(payload_dict: dict, status_code: int = 200):
+    """Helper to generate a mock httpx.Response resembling Google Gemini REST API."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = status_code
+    if status_code == 200:
+        gemini_body = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"text": json.dumps(payload_dict)}
+                        ],
+                        "role": "model"
+                    },
+                    "finishReason": "STOP",
+                    "index": 0
+                }
+            ]
+        }
+        mock_resp.json.return_value = gemini_body
+    else:
+        mock_resp.json.return_value = {"error": {"message": "API Error", "code": status_code}}
+    return mock_resp
+
+
+def test_gemini_successful_response_ai_assisted(monkeypatch):
+    """Test A & B: Successful Gemini response produces ai_assisted mode and valid structure."""
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "test-valid-key")
+    monkeypatch.setattr("app.core.config.settings.GEMINI_MODEL", "gemini-1.5-flash")
+
+    mock_gemini_output = {
+        "purpose_mismatch": True,
+        "risk_level": "High",
+        "ai_recommendation": "REVIEW",
+        "explanation": "Active marketing campaigns diverge from stated order fulfillment consent (Advisory only)."
+    }
+
+    mock_response = make_mock_gemini_response(mock_gemini_output)
+
+    with patch("httpx.Client.post", return_value=mock_response) as mock_post:
+        result = AIService.analyze_record({
+            "record_id": "GEM-001",
+            "category": "Customer",
+            "sensitivity": "Medium",
+            "collection_purpose": "Order Fulfillment",
+            "current_usage": "Targeted Marketing Campaigns",
+            "status": "Active",
+            "expiry_date": "2027-01-01"
+        })
+
+        assert mock_post.called
+        assert result["analysis_mode"] == "ai_assisted"
+        assert result["purpose_mismatch"] is True
+        assert result["risk_level"] == "High"
+        assert result["ai_recommendation"] == "REVIEW"
+        assert result["explanation"] == "Active marketing campaigns diverge from stated order fulfillment consent (Advisory only)."
+        assert result["record_id"] == "GEM-001"
+
+
+def test_gemini_privacy_safe_request_payload(monkeypatch):
+    """Test C: Verifies ONLY privacy-safe governance metadata is transmitted to Gemini."""
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "secret-test-key")
+
+    mock_gemini_output = {
+        "purpose_mismatch": False,
+        "risk_level": "Low",
+        "ai_recommendation": "KEEP",
+        "explanation": "Semantically aligned with operational goals (Advisory only)."
+    }
+    mock_response = make_mock_gemini_response(mock_gemini_output)
+
+    with patch("httpx.Client.post", return_value=mock_response) as mock_post:
+        # Pass a record with sensitive fields present in the record dict
+        AIService.analyze_record({
+            "record_id": "SENSITIVE-RECORD-ID-9999",
+            "customer_name": "Jane Doe",
+            "email": "jane.doe@example.com",
+            "credit_card": "4111-2222-3333-4444",
+            "category": "Financial",
+            "sensitivity": "High",
+            "collection_purpose": "Billing and Invoice Processing",
+            "current_usage": "Billing Settlement",
+            "status": "Active",
+            "expiry_date": "2028-12-31"
+        })
+
+        assert mock_post.called
+        args, kwargs = mock_post.call_args
+
+        # Inspect headers for x-goog-api-key
+        headers = kwargs.get("headers", {})
+        assert headers.get("x-goog-api-key") == "secret-test-key"
+
+        # Inspect URL and request payload
+        url = args[0] if args else kwargs.get("url", "")
+        assert "generativelanguage.googleapis.com" in url
+
+        json_payload = kwargs.get("json", {})
+        prompt_text = json_payload["contents"][0]["parts"][0]["text"]
+
+        # Ensure privacy boundary: governance metadata IS present
+        assert "Billing and Invoice Processing" in prompt_text
+        assert "Billing Settlement" in prompt_text
+        assert "Financial" in prompt_text
+        assert "High" in prompt_text
+
+        # Ensure privacy boundary: PII and raw IDs ARE NEVER transmitted
+        assert "SENSITIVE-RECORD-ID-9999" not in prompt_text
+        assert "Jane Doe" not in prompt_text
+        assert "jane.doe@example.com" not in prompt_text
+        assert "4111-2222-3333-4444" not in prompt_text
+
+
+def test_gemini_http_failure_triggers_rule_based_fallback(monkeypatch):
+    """Test D: HTTP 500 error from Gemini triggers deterministic rule-based fallback."""
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "test-valid-key")
+
+    mock_response = make_mock_gemini_response({}, status_code=500)
+
+    with patch("httpx.Client.post", return_value=mock_response):
+        result = AIService.analyze_record({
+            "record_id": "ERR-500",
+            "category": "Customer",
+            "sensitivity": "High",
+            "collection_purpose": "Order Processing",
+            "current_usage": "Targeted Marketing Campaigns",
+            "status": "Active",
+            "expiry_date": "2027-01-01"
+        })
+
+        assert result["analysis_mode"] == "rule_based"
+        # Rule-based engine correctly flags marketing creep
+        assert result["purpose_mismatch"] is True
+        assert result["risk_level"] in {"High", "Critical"}
+        assert result["ai_recommendation"] == "REVIEW"
+
+
+def test_gemini_timeout_triggers_rule_based_fallback(monkeypatch):
+    """Test E: Network timeout triggers deterministic rule-based fallback."""
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "test-valid-key")
+
+    with patch("httpx.Client.post", side_effect=httpx.TimeoutException("Read timeout")):
+        result = AIService.analyze_record({
+            "record_id": "TIME-OUT",
+            "category": "Customer",
+            "sensitivity": "Low",
+            "collection_purpose": "Support Ticket Resolution",
+            "current_usage": "Support Desk Inquiries",
+            "status": "Active",
+            "expiry_date": "2027-01-01"
+        })
+
+        assert result["analysis_mode"] == "rule_based"
+        assert result["purpose_mismatch"] is False
+        assert result["ai_recommendation"] == "KEEP"
+
+
+def test_no_api_key_defaults_to_rule_based(monkeypatch):
+    """Test F: Missing API key executes rule-based engine directly without HTTP calls."""
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "")
+    monkeypatch.setattr("app.core.config.settings.AI_API_KEY", "")
+
+    with patch("httpx.Client.post") as mock_post:
+        result = AIService.analyze_record({
+            "record_id": "NO-KEY",
+            "category": "Employee",
+            "sensitivity": "High",
+            "collection_purpose": "Payroll Processing",
+            "current_usage": "Salary Disbursement",
+            "status": "Active",
+            "expiry_date": "2026-12-31"
+        })
+
+        assert not mock_post.called
+        assert result["analysis_mode"] == "rule_based"
+        assert result["purpose_mismatch"] is False
+        assert result["ai_recommendation"] == "KEEP"
+
+
+def test_gemini_invalid_json_triggers_rule_based_fallback(monkeypatch):
+    """Test G: Invalid/malformed JSON returned by LLM triggers rule-based fallback."""
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "test-valid-key")
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": "I am an AI and cannot generate JSON: error 404"}]
+                }
+            }
+        ]
+    }
+
+    with patch("httpx.Client.post", return_value=mock_resp):
+        result = AIService.analyze_record({
+            "record_id": "BAD-JSON",
+            "category": "Customer",
+            "sensitivity": "Low",
+            "collection_purpose": "Order Delivery",
+            "current_usage": "Order Delivery",
+            "status": "Active",
+            "expiry_date": "2027-01-01"
+        })
+
+        assert result["analysis_mode"] == "rule_based"
+        assert result["purpose_mismatch"] is False
+        assert result["ai_recommendation"] == "KEEP"
+
+
+def test_gemini_invalid_risk_or_recommendation_triggers_rule_based_fallback(monkeypatch):
+    """Test H: Invalid enum values from LLM (e.g. unknown recommendation) trigger fallback."""
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "test-valid-key")
+
+    # Invalid recommendation "DESTROY" and risk "Catastrophic"
+    invalid_gemini_output = {
+        "purpose_mismatch": True,
+        "risk_level": "Catastrophic",
+        "ai_recommendation": "DESTROY",
+        "explanation": "Non-compliant"
+    }
+    mock_response = make_mock_gemini_response(invalid_gemini_output)
+
+    with patch("httpx.Client.post", return_value=mock_response):
+        result = AIService.analyze_record({
+            "record_id": "BAD-ENUM",
+            "category": "Customer",
+            "sensitivity": "Medium",
+            "collection_purpose": "User Profile",
+            "current_usage": "User Profile",
+            "status": "Active",
+            "expiry_date": "2027-01-01"
+        })
+
+        assert result["analysis_mode"] == "rule_based"
+        assert result["purpose_mismatch"] is False
+        assert result["ai_recommendation"] == "KEEP"

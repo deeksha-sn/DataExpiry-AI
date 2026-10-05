@@ -19,8 +19,10 @@ class Settings(BaseSettings):
         "http://localhost:3000"
     ]
 
-    # Future AI API Key placeholder
+    # AI Governance Engine Configuration (Google Gemini)
     AI_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-1.5-flash"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

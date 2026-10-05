@@ -7,9 +7,11 @@ Provides semantic purpose-mismatch detection, risk scoring, lifecycle recommenda
 Includes optional LLM provider mode with automatic, reliable rule-based fallback.
 """
 
+import json
 import re
 import logging
 from typing import Dict, Any, List, Optional, Set, Tuple
+import httpx
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -100,6 +102,273 @@ HIGH_RISK_CREEP_SIGNALS: Dict[str, Dict[str, Any]] = {
         "severity": "High"
     }
 }
+
+# ==============================================================================
+# AI Provider Module: Google Gemini REST Client & Governance Validator
+# ==============================================================================
+
+VALID_RISK_LEVELS: Set[str] = {"Low", "Medium", "High", "Critical"}
+VALID_RECOMMENDATIONS: Set[str] = {"KEEP", "REVIEW", "ANONYMIZE", "DELETE"}
+DEFAULT_GEMINI_MODEL: str = "gemini-1.5-flash"
+GEMINI_API_ENDPOINT_TEMPLATE: str = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+)
+
+
+class GeminiAIProvider:
+    """
+    Dedicated Google Gemini REST API provider for semantic purpose mismatch evaluation.
+    Communicates via httpx using Google's Generative Language REST API.
+    Enforces strict privacy boundaries, timeout handling, and schema validation.
+    Returns None on any error to activate the deterministic rule-based fallback.
+    """
+
+    @classmethod
+    def get_api_key(cls) -> str:
+        """Retrieves configured Gemini API key, preferring GEMINI_API_KEY with AI_API_KEY fallback."""
+        key = getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "AI_API_KEY", "")
+        return key.strip() if key else ""
+
+    @classmethod
+    def get_model(cls) -> str:
+        """Retrieves configured Gemini model name, defaulting to gemini-1.5-flash."""
+        model = getattr(settings, "GEMINI_MODEL", "").strip()
+        return model if model else DEFAULT_GEMINI_MODEL
+
+    @classmethod
+    def is_available(cls) -> bool:
+        """Checks if a Gemini API key is configured."""
+        return bool(cls.get_api_key())
+
+    @classmethod
+    def build_prompt(
+        cls,
+        category: str,
+        sensitivity: str,
+        collection_purpose: str,
+        current_usage: str,
+        status: str,
+        expiry_date: str,
+    ) -> str:
+        """
+        Constructs privacy-safe governance audit prompt for Gemini.
+
+        =========================== PRIVACY BOUNDARY ===========================
+        Under GDPR / CCPA data minimization principles:
+        - ONLY non-PII operational governance metadata is included here:
+          (category, sensitivity, collection_purpose, current_usage, status, expiry_date).
+        - DO NOT SEND: customer names, email addresses, phone numbers,
+          identity codes (record_id), passwords, financial details, or raw records.
+        ========================================================================
+        """
+        return (
+            "You are an enterprise data privacy and governance auditor specializing in GDPR, "
+            "CCPA, and purpose limitation compliance.\n\n"
+            "Evaluate whether the active operational usage of enterprise data is compatible "
+            "with the stated purpose of collection.\n\n"
+            "PRIVACY BOUNDARY: You are only provided non-PII governance metadata.\n\n"
+            "METADATA FOR AUDIT:\n"
+            f"- Data Category: {category}\n"
+            f"- Data Sensitivity: {sensitivity}\n"
+            f"- Stated Collection Purpose: {collection_purpose}\n"
+            f"- Active Current Usage: {current_usage}\n"
+            f"- Retention Lifecycle Status: {status}\n"
+            f"- Mandated Expiry Date: {expiry_date}\n\n"
+            "GOVERNANCE EVALUATION RULES:\n"
+            "1. Purpose Mismatch: Set purpose_mismatch to true if active usage introduces secondary "
+            "purposes (e.g. unconsented marketing, AI/ML model training, third-party broker monetization, "
+            "cross-service profiling) not authorized by the stated collection purpose. Set to false if "
+            "usage is operationally compatible or functionally equivalent.\n"
+            "2. Risk Level: Set risk_level to 'Critical', 'High', 'Medium', or 'Low' considering data "
+            "sensitivity, retention status (expired vs active), and degree of purpose divergence.\n"
+            "3. Advisory Recommendation: Recommend 'KEEP', 'REVIEW', 'ANONYMIZE', or 'DELETE'.\n"
+            "   IMPORTANT: This recommendation is ADVISORY ONLY. It does not execute actions or make binding "
+            "governance decisions.\n"
+            "4. Explanation: Provide a concise (1-2 sentences) natural language compliance explanation "
+            "stating the rationale and that this is an advisory finding.\n\n"
+            "Return ONLY a valid JSON object matching this schema exactly:\n"
+            "{\n"
+            '  "purpose_mismatch": true,\n'
+            '  "risk_level": "High",\n'
+            '  "ai_recommendation": "REVIEW",\n'
+            '  "explanation": "concise advisory explanation"\n'
+            "}"
+        )
+
+    @classmethod
+    def parse_and_validate_response(cls, response_text: str) -> Optional[Dict[str, Any]]:
+        """
+        Parses raw LLM text into a validated dictionary.
+        Returns None if parsing fails or values violate the required schema/types.
+        """
+        if not response_text or not response_text.strip():
+            logger.warning("Invalid provider response: empty response text received.")
+            return None
+
+        # Clean potential markdown fences (e.g. ```json ... ```)
+        cleaned_text = response_text.strip()
+        if cleaned_text.startswith("```"):
+            lines = cleaned_text.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            cleaned_text = "\n".join(lines).strip()
+
+        try:
+            parsed = json.loads(cleaned_text)
+        except Exception as e:
+            logger.warning(f"Invalid provider response: failed to parse JSON ({e}).")
+            return None
+
+        if not isinstance(parsed, dict):
+            logger.warning("Invalid provider response: parsed JSON is not an object/dictionary.")
+            return None
+
+        # Check required fields
+        required_keys = {"purpose_mismatch", "risk_level", "ai_recommendation", "explanation"}
+        if not required_keys.issubset(parsed.keys()):
+            missing = required_keys - set(parsed.keys())
+            logger.warning(f"Invalid provider response: missing required fields {missing}.")
+            return None
+
+        # Validate purpose_mismatch boolean
+        raw_mismatch = parsed.get("purpose_mismatch")
+        if isinstance(raw_mismatch, bool):
+            purpose_mismatch = raw_mismatch
+        elif isinstance(raw_mismatch, str):
+            if raw_mismatch.lower() == "true":
+                purpose_mismatch = True
+            elif raw_mismatch.lower() == "false":
+                purpose_mismatch = False
+            else:
+                logger.warning(f"Invalid provider response: non-boolean purpose_mismatch '{raw_mismatch}'.")
+                return None
+        else:
+            logger.warning(f"Invalid provider response: unexpected type for purpose_mismatch ({type(raw_mismatch)}).")
+            return None
+
+        # Validate risk_level (case-insensitive check against VALID_RISK_LEVELS)
+        raw_risk = str(parsed.get("risk_level", "")).strip().title()
+        if raw_risk not in VALID_RISK_LEVELS:
+            logger.warning(f"Invalid provider response: invalid risk_level '{raw_risk}'.")
+            return None
+
+        # Validate ai_recommendation (case-insensitive check against VALID_RECOMMENDATIONS)
+        raw_rec = str(parsed.get("ai_recommendation", "")).strip().upper()
+        if raw_rec not in VALID_RECOMMENDATIONS:
+            logger.warning(f"Invalid provider response: invalid ai_recommendation '{raw_rec}'.")
+            return None
+
+        # Validate explanation
+        raw_exp = str(parsed.get("explanation", "")).strip()
+        if not raw_exp:
+            logger.warning("Invalid provider response: empty explanation.")
+            return None
+
+        return {
+            "purpose_mismatch": purpose_mismatch,
+            "risk_level": raw_risk,
+            "ai_recommendation": raw_rec,
+            "explanation": raw_exp,
+        }
+
+    @classmethod
+    def analyze(
+        cls,
+        category: str,
+        sensitivity: str,
+        collection_purpose: str,
+        current_usage: str,
+        status: str,
+        expiry_date: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Executes real Gemini REST API call using httpx.
+
+        =========================== PRIVACY BOUNDARY ===========================
+        Only non-PII operational governance metadata is accepted and passed.
+        No customer names, emails, IDs, credentials, or document contents are ever transmitted.
+        ========================================================================
+        """
+        api_key = cls.get_api_key()
+        if not api_key:
+            logger.debug("Gemini AI provider unavailable: no API key configured. Falling back to rule-based engine.")
+            return None
+
+        model = cls.get_model()
+        url = GEMINI_API_ENDPOINT_TEMPLATE.format(model=model)
+        prompt = cls.build_prompt(
+            category=category,
+            sensitivity=sensitivity,
+            collection_purpose=collection_purpose,
+            current_usage=current_usage,
+            status=status,
+            expiry_date=expiry_date,
+        )
+
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        }
+
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt}
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.1,
+                "responseMimeType": "application/json"
+            }
+        }
+
+        try:
+            logger.info(f"Initiating Gemini AI request (model: {model}) for semantic governance audit...")
+            with httpx.Client(timeout=httpx.Timeout(6.0, connect=3.0)) as client:
+                response = client.post(url, headers=headers, json=payload)
+
+            if response.status_code != 200:
+                logger.warning(
+                    f"Gemini API request failed with HTTP status {response.status_code}. "
+                    "Falling back to rule-based engine."
+                )
+                return None
+
+            data = response.json()
+            candidates = data.get("candidates", [])
+            if not candidates:
+                logger.warning("Gemini API response contained no candidates. Falling back to rule-based engine.")
+                return None
+
+            candidate = candidates[0]
+            content = candidate.get("content", {})
+            parts = content.get("parts", [])
+            if not parts:
+                logger.warning("Gemini API candidate contained no parts. Falling back to rule-based engine.")
+                return None
+
+            generated_text = parts[0].get("text", "")
+            assessment = cls.parse_and_validate_response(generated_text)
+            if not assessment:
+                logger.warning("Gemini API response failed validation. Falling back to rule-based engine.")
+                return None
+
+            logger.info("Successfully received and validated Gemini AI governance assessment.")
+            return assessment
+
+        except httpx.TimeoutException:
+            logger.warning("Gemini API request timed out. Falling back to rule-based engine.")
+            return None
+        except httpx.HTTPError as e:
+            logger.warning(f"Gemini API HTTP communication error: {e}. Falling back to rule-based engine.")
+            return None
+        except Exception as e:
+            logger.warning(f"Unexpected error querying Gemini API: {e}. Falling back to rule-based engine.")
+            return None
 
 
 class AIService:
@@ -369,37 +638,27 @@ class AIService:
         expiry_date: str
     ) -> Optional[Dict[str, Any]]:
         """
-        Optional external AI provider integration (e.g. Gemini / OpenAI compatible)
-        triggered if settings.AI_API_KEY is configured.
-        Silently returns None on any failure/timeout so rule-based engine takes over.
-        """
-        api_key = getattr(settings, "AI_API_KEY", "").strip()
-        if not api_key:
-            return None
+        Executes semantic analysis via Google Gemini REST API if configured.
 
-        # If an external provider key is present, attempt call via httpx with strict timeout
-        try:
-            import httpx
-            prompt = (
-                f"Analyze enterprise data record for GDPR purpose compliance:\n"
-                f"Record ID: {record_id}\n"
-                f"Category: {category}\n"
-                f"Sensitivity: {sensitivity}\n"
-                f"Collection Purpose: {collection_purpose}\n"
-                f"Current Usage: {current_usage}\n"
-                f"Status: {status}\n"
-                f"Expiry: {expiry_date}\n\n"
-                f"Return JSON with: purpose_mismatch (bool), risk_level (Low/Medium/High/Critical), "
-                f"ai_recommendation (KEEP/REVIEW/ANONYMIZE/DELETE), explanation (string)."
-            )
-            # Lightweight external call demonstration with 2s timeout
-            # Note: Provider URL can be configured; if unreachable, falls back immediately
-            logger.info(f"Attempting AI provider analysis for record {record_id}...")
-            # We enforce fallback if endpoint is not directly configured
-            return None
-        except Exception as e:
-            logger.warning(f"AI Provider query failed: {e}. Falling back to rule-based engine.")
-            return None
+        =========================== PRIVACY BOUNDARY ===========================
+        Only non-PII operational governance metadata (category, sensitivity,
+        collection_purpose, current_usage, status, expiry_date) is passed to Gemini.
+        record_id, customer names, emails, credentials, and document contents
+        are strictly omitted from the external LLM prompt.
+        ========================================================================
+
+        FALLBACK BEHAVIOR:
+        Returns None on any network failure, timeout, invalid schema, or missing API key,
+        instantly falling back to the deterministic rule-based engine.
+        """
+        return GeminiAIProvider.analyze(
+            category=category,
+            sensitivity=sensitivity,
+            collection_purpose=collection_purpose,
+            current_usage=current_usage,
+            status=status,
+            expiry_date=expiry_date,
+        )
 
     @classmethod
     def analyze_record(cls, record_dict: Dict[str, Any]) -> Dict[str, Any]:
