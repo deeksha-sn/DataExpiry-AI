@@ -4,6 +4,9 @@ from app.schemas.data_record import (
     DataRecordUpdate,
     DataRecordResponse,
     HealthResponse,
+    PurposeMismatchCheckRequest,
+    PurposeMismatchResult,
+    BatchAIAnalysisResponse,
 )
 
 __all__ = [
@@ -12,4 +15,7 @@ __all__ = [
     "DataRecordUpdate",
     "DataRecordResponse",
     "HealthResponse",
+    "PurposeMismatchCheckRequest",
+    "PurposeMismatchResult",
+    "BatchAIAnalysisResponse",
 ]
