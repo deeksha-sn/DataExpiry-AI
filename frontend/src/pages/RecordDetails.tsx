@@ -2,11 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { apiService } from '../services/api';
 import { DataRecord } from '../types';
-import { FileText, Search, Shield, ArrowLeft, Calendar, Tag, User, Server } from 'lucide-react';
+import { FileText, Search, Shield, Calendar, Tag, User, Clock, Sparkles } from 'lucide-react';
 
 export const RecordDetails: React.FC = () => {
   const [searchParams] = useSearchParams();
-  const queryId = searchParams.get('id') || 'CUS-1001';
+  const queryId = searchParams.get('id') || '';
 
   const [inputRecordId, setInputRecordId] = useState<string>(queryId);
   const [record, setRecord] = useState<DataRecord | null>(null);
@@ -46,10 +46,8 @@ export const RecordDetails: React.FC = () => {
     <div className="space-y-6 max-w-4xl">
       {/* Header */}
       <div>
-        <div className="inline-flex items-center gap-2 text-xs font-mono font-semibold px-2.5 py-1 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 mb-2">
-          ASSIGNED TO TEAM MEMBER 3
-        </div>
-        <h1 className="text-3xl font-bold tracking-tight text-slate-100">Data Record Details</h1>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-[.18em] text-sky-400">Catalog · Record profile</p>
+        <h1 className="text-3xl font-bold tracking-tight text-white">Data record details</h1>
         <p className="text-slate-400 mt-1">Deep inspection of record metadata, collection purpose, and lifecycle status.</p>
       </div>
 
@@ -58,6 +56,7 @@ export const RecordDetails: React.FC = () => {
         <div className="relative flex-1">
           <Search className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
           <input
+            aria-label="Record ID"
             type="text"
             value={inputRecordId}
             onChange={(e) => setInputRecordId(e.target.value)}
@@ -128,9 +127,27 @@ export const RecordDetails: React.FC = () => {
                 <p className="font-mono text-slate-200">{record.expiry_date} ({record.retention_period})</p>
               </div>
 
+              <div className="space-y-1">
+                <span className="text-slate-400 text-xs flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-slate-500" /> Last Accessed</span>
+                <p className="font-mono text-slate-200">{record.last_accessed || 'Not provided'}</p>
+              </div>
+
+              <div className="space-y-1">
+                <span className="text-slate-400 text-xs">Purpose Mismatch</span>
+                <p className="font-semibold text-slate-200">{record.purpose_mismatch === undefined ? 'Not assessed' : record.purpose_mismatch ? 'Flagged' : 'Not flagged'}</p>
+              </div>
+
               <div className="space-y-1 md:col-span-2">
                 <span className="text-slate-400 text-xs">Stated Collection Purpose</span>
                 <p className="p-3 rounded-lg bg-slate-900 border border-slate-800 text-slate-300">{record.collection_purpose}</p>
+              </div>
+              <div className="space-y-3 md:col-span-2 border-t border-slate-800 pt-5">
+                <h3 className="flex items-center gap-2 font-semibold text-slate-200"><Sparkles className="h-4 w-4 text-violet-400" /> AI assessment</h3>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div><span className="text-xs text-slate-400">Recommendation</span><p className="mt-1 font-semibold text-violet-200">{record.ai_recommendation || 'Not provided by API'}</p></div>
+                  <div><span className="text-xs text-slate-400">Risk level</span><p className="mt-1 text-slate-200">{record.risk_level || 'Not provided by API'}</p></div>
+                  <div className="md:col-span-2"><span className="text-xs text-slate-400">Explanation</span><p className="mt-1 text-slate-300">{record.ai_explanation || 'No AI explanation is available for this record.'}</p></div>
+                </div>
               </div>
 
               <div className="space-y-1 md:col-span-2">
@@ -140,7 +157,7 @@ export const RecordDetails: React.FC = () => {
             </div>
           </div>
         </div>
-      ) : null}
+      ) : <div className="rounded-xl border border-slate-800 bg-slate-950 p-10 text-center text-slate-400">Enter a record ID above, or open a record from the inventory to inspect its details.</div>}
     </div>
   );
 };

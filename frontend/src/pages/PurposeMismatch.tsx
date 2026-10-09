@@ -1,48 +1,13 @@
-import React from 'react';
-import { AlertTriangle, Sparkles, ShieldCheck } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { apiService } from '../services/api';
+import { DataRecord } from '../types';
 
 export const PurposeMismatch: React.FC = () => {
-  return (
-    <div className="space-y-6">
-      {/* Title */}
-      <div>
-        <div className="inline-flex items-center gap-2 text-xs font-mono font-semibold px-2.5 py-1 rounded bg-purple-950 text-purple-300 border border-purple-800 mb-2">
-          ASSIGNED TO TEAM MEMBER 2 (AI & PURPOSE GOVERNANCE)
-        </div>
-        <h1 className="text-3xl font-bold tracking-tight text-slate-100">Purpose Mismatch Detection</h1>
-        <p className="text-slate-400 mt-1">Identify data usage creep where active utilization diverges from original collection consent.</p>
-      </div>
-
-      {/* Module Handoff Banner */}
-      <div className="p-6 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
-        <div className="flex items-center gap-3 text-purple-400 font-semibold">
-          <AlertTriangle className="w-5 h-5" />
-          <span>Module Shell — Ready for Team Member 2 AI Integration</span>
-        </div>
-        <p className="text-sm text-slate-400 leading-relaxed">
-          Team Member 2 will connect the backend AI semantic analysis module to compare <code className="text-purple-300">collection_purpose</code> against <code className="text-purple-300">current_usage</code> and generate purpose divergence scores.
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-          <div className="p-4 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
-            <span className="text-xs font-mono text-slate-400">Target Feature 1</span>
-            <h3 className="font-semibold text-slate-200">Semantic Divergence Scoring</h3>
-            <p className="text-xs text-slate-400">Embedding vector comparison between consent and usage.</p>
-          </div>
-
-          <div className="p-4 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
-            <span className="text-xs font-mono text-slate-400">Target Feature 2</span>
-            <h3 className="font-semibold text-slate-200">High-Risk Creep Alerts</h3>
-            <p className="text-xs text-slate-400">Highlight monetization or unapproved AI training use cases.</p>
-          </div>
-
-          <div className="p-4 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
-            <span className="text-xs font-mono text-slate-400">Target Feature 3</span>
-            <h3 className="font-semibold text-slate-200">Remediation Workflows</h3>
-            <p className="text-xs text-slate-400">Flag for legal consent update or immediate usage halt.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  const [records,setRecords]=useState<DataRecord[]>([]);const [loading,setLoading]=useState(true);const [error,setError]=useState('');
+  const load=()=>{setLoading(true);setError('');apiService.getDataRecords({limit:500}).then(data=>setRecords(data.filter(r=>Boolean(r.purpose_mismatch)))).catch(e=>setError(e.message||'Unable to load purpose mismatch records.')).finally(()=>setLoading(false));};useEffect(load,[]);
+  return <div className="space-y-6"><header className="flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-[.18em] text-violet-400">Governance · Purpose controls</p><h1 className="text-3xl font-bold text-white">Purpose mismatch center</h1><p className="mt-1 text-sm text-slate-400">Review records where current usage differs from the collection purpose.</p></div><button onClick={load} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"><RefreshCw size={15}/> Refresh</button></header>
+    {loading?<div className="rounded-xl border border-slate-800 bg-slate-950 p-14 text-center text-slate-400">Loading mismatch findings…</div>:error?<div role="alert" className="rounded-xl border border-rose-900 bg-rose-950/30 p-10 text-center text-rose-300">{error}<button onClick={load} className="ml-3 underline">Try again</button></div>:records.length===0?<div className="rounded-xl border border-slate-800 bg-slate-950 p-14 text-center"><AlertTriangle className="mx-auto mb-3 text-emerald-400"/><h2 className="font-semibold text-white">No purpose mismatches reported</h2><p className="mt-1 text-sm text-slate-400">The API returned no records with purpose_mismatch set.</p></div>:<div className="space-y-3">{records.map(r=><article key={r.id} className="rounded-xl border border-slate-800 bg-slate-950 p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><Link to={`/records?id=${encodeURIComponent(r.record_id)}`} className="font-mono font-semibold text-sky-400 hover:underline">{r.record_id}</Link><h2 className="mt-1 text-lg font-semibold text-white">{r.data_type}<span className="ml-2 text-sm font-normal text-slate-500">{r.category}</span></h2></div><div className="flex gap-2"><span className="rounded-full border border-violet-800 bg-violet-950/50 px-2.5 py-1 text-xs text-violet-300">Mismatch flagged</span><span className="rounded-full border border-rose-800 bg-rose-950/50 px-2.5 py-1 text-xs text-rose-300">{r.risk_level || 'Risk not provided'}</span></div></div><div className="mt-5 grid gap-4 md:grid-cols-2"><div><p className="text-xs uppercase tracking-wide text-slate-500">Original purpose</p><p className="mt-1 text-sm text-slate-200">{r.collection_purpose}</p></div><div><p className="text-xs uppercase tracking-wide text-slate-500">Current usage</p><p className="mt-1 text-sm text-slate-200">{r.current_usage}</p></div></div><div className="mt-4 grid gap-4 border-t border-slate-800 pt-4 md:grid-cols-3"><div><p className="text-xs text-slate-500">Sensitivity</p><p className="mt-1 text-sm text-slate-200">{r.sensitivity}</p></div><div><p className="text-xs text-slate-500">Recommendation</p><p className="mt-1 text-sm text-slate-200">{r.ai_recommendation || 'Not provided'}</p></div><div><p className="text-xs text-slate-500">AI explanation</p><p className="mt-1 text-sm text-slate-300">{r.ai_explanation || 'Explanation not provided by the API.'}</p></div></div></article>)}</div>}
+  </div>;
 };
