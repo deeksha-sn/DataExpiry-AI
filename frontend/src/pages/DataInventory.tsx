@@ -1,151 +1,40 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Search, RefreshCw } from 'lucide-react';
 import { apiService } from '../services/api';
 import { DataRecord } from '../types';
-import { Database, Filter, Search, ShieldAlert, CheckCircle, Clock } from 'lucide-react';
-import { Link } from 'react-router-dom';
+
+const selectClass = 'rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200';
+const badge = (value: string) => `inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${value === 'Expired' || value === 'High' || value === 'Critical' ? 'border-rose-800 bg-rose-950/60 text-rose-300' : value === 'Expiring Soon' || value === 'Medium' || value === 'REVIEW' ? 'border-amber-800 bg-amber-950/60 text-amber-300' : 'border-emerald-800 bg-emerald-950/50 text-emerald-300'}`;
 
 export const DataInventory: React.FC = () => {
   const [records, setRecords] = useState<DataRecord[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedCategory, setSelectedCategory] = useState<string>('');
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
+  const [filters, setFilters] = useState({ category: '', sensitivity: '', status: '', expiry: '', mismatch: '', recommendation: '' });
+  const load = () => { setLoading(true); setError(''); apiService.getDataRecords({ limit: 500 }).then(setRecords).catch(e => setError(e.message || 'Unable to load records.')).finally(() => setLoading(false)); };
+  useEffect(load, []);
+  const categories = [...new Set(records.map(r => r.category))];
+  const visible = useMemo(() => records.filter(r => {
+    const q = search.toLowerCase();
+    return (!q || [r.record_id, r.data_type, r.category, r.collection_purpose, r.current_usage, r.owner].some(v => v?.toLowerCase().includes(q))) &&
+      (!filters.category || r.category === filters.category) && (!filters.sensitivity || r.sensitivity === filters.sensitivity) && (!filters.status || r.status === filters.status) &&
+      (!filters.expiry || (() => { const days = (Date.parse(r.expiry_date) - Date.now()) / 86400000; return filters.expiry === 'expired' ? days < 0 : filters.expiry === '30' ? days >= 0 && days <= 30 : days > 30 && days <= 90; })()) &&
+      (!filters.mismatch || String(Boolean(r.purpose_mismatch)) === filters.mismatch) && (!filters.recommendation || r.ai_recommendation === filters.recommendation);
+  }), [records, search, filters]);
+  const setFilter = (key: keyof typeof filters, value: string) => setFilters(old => ({ ...old, [key]: value }));
 
-  const loadData = () => {
-    setLoading(true);
-    apiService.getDataRecords({ category: selectedCategory || undefined })
-      .then(data => {
-        setRecords(data);
-        setLoading(false);
-      })
-      .catch(err => {
-        setError(err.message);
-        setLoading(false);
-      });
-  };
-
-  useEffect(() => {
-    loadData();
-  }, [selectedCategory]);
-
-  const filteredRecords = records.filter(r => 
-    r.record_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    r.data_type.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    r.owner.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  return (
-    <div className="space-y-6">
-      {/* Page Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="inline-flex items-center gap-2 text-xs font-mono font-semibold px-2.5 py-1 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 mb-2">
-            ASSIGNED TO TEAM MEMBER 3
-          </div>
-          <h1 className="text-3xl font-bold tracking-tight text-slate-100">Enterprise Data Inventory</h1>
-          <p className="text-slate-400 mt-1">Catalog of discoverable enterprise data assets, usage, and retention schedules.</p>
-        </div>
-      </div>
-
-      {/* Filter Toolbar */}
-      <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex flex-wrap gap-4 items-center justify-between">
-        <div className="flex items-center gap-3 flex-1 min-w-[280px]">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
-            <input
-              type="text"
-              placeholder="Search by Record ID, Data Type, or Owner..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-9 pr-4 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500"
-            />
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Filter className="w-4 h-4 text-slate-500" />
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500"
-          >
-            <option value="">All Categories</option>
-            <option value="Customer">Customer</option>
-            <option value="Financial">Financial</option>
-            <option value="Employee">Employee</option>
-            <option value="Identity">Identity</option>
-            <option value="Transaction">Transaction</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Table */}
-      <div className="rounded-xl bg-slate-950 border border-slate-800 overflow-hidden">
-        {loading ? (
-          <div className="p-12 text-center text-slate-400 font-mono">Loading data records from API...</div>
-        ) : error ? (
-          <div className="p-12 text-center text-rose-400 font-mono">Error: {error}</div>
-        ) : filteredRecords.length === 0 ? (
-          <div className="p-12 text-center text-slate-500 font-mono">No data records found.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-900/80 border-b border-slate-800 text-slate-400 font-mono text-xs uppercase">
-                <tr>
-                  <th className="py-3 px-4">Record ID</th>
-                  <th className="py-3 px-4">Data Type</th>
-                  <th className="py-3 px-4">Category</th>
-                  <th className="py-3 px-4">Sensitivity</th>
-                  <th className="py-3 px-4">Owner</th>
-                  <th className="py-3 px-4">Expiry Date</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4 text-right">Details</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60 font-sans">
-                {filteredRecords.map((record) => (
-                  <tr key={record.id} className="hover:bg-slate-900/40 transition-colors">
-                    <td className="py-3.5 px-4 font-mono font-semibold text-sky-400">{record.record_id}</td>
-                    <td className="py-3.5 px-4 font-medium text-slate-200">{record.data_type}</td>
-                    <td className="py-3.5 px-4 text-slate-400">{record.category}</td>
-                    <td className="py-3.5 px-4">
-                      <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                        record.sensitivity === 'High' ? 'bg-rose-950 text-rose-400 border border-rose-800' :
-                        record.sensitivity === 'Medium' ? 'bg-amber-950 text-amber-400 border border-amber-800' :
-                        'bg-slate-900 text-slate-400 border border-slate-800'
-                      }`}>
-                        {record.sensitivity}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4 text-slate-400">{record.owner}</td>
-                    <td className="py-3.5 px-4 font-mono text-xs text-slate-300">{record.expiry_date}</td>
-                    <td className="py-3.5 px-4">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        record.status === 'Expired' ? 'bg-rose-950 text-rose-300 border border-rose-800' :
-                        record.status === 'Expiring Soon' ? 'bg-amber-950 text-amber-300 border border-amber-800' :
-                        'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                      }`}>
-                        {record.status === 'Expired' ? <ShieldAlert className="w-3 h-3" /> :
-                         record.status === 'Expiring Soon' ? <Clock className="w-3 h-3" /> :
-                         <CheckCircle className="w-3 h-3" />}
-                        {record.status}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4 text-right">
-                      <Link
-                        to={`/records?id=${record.record_id}`}
-                        className="text-xs font-mono text-sky-400 hover:text-sky-300 hover:underline"
-                      >
-                        View Record →
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+  return <div className="space-y-6">
+    <header className="flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-[.18em] text-sky-400">Governance · Catalog</p><h1 className="text-3xl font-bold text-white">Data inventory</h1><p className="mt-1 text-sm text-slate-400">Search and review data assets, their declared purpose, and retention state.</p></div><button onClick={load} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"><RefreshCw size={15}/> Refresh</button></header>
+    <section className="rounded-xl border border-slate-800 bg-slate-950 p-4"><div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6"><label className="relative md:col-span-3 xl:col-span-2"><Search size={16} className="absolute left-3 top-3 text-slate-500"/><input aria-label="Search records" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search ID, type, purpose, owner…" className="w-full rounded-lg border border-slate-700 bg-slate-900 py-2 pl-9 pr-3 text-sm text-white placeholder:text-slate-500"/></label>
+      <select aria-label="Filter category" className={selectClass} value={filters.category} onChange={e=>setFilter('category',e.target.value)}><option value="">All categories</option>{categories.map(c=><option key={c}>{c}</option>)}</select>
+      <select aria-label="Filter sensitivity" className={selectClass} value={filters.sensitivity} onChange={e=>setFilter('sensitivity',e.target.value)}><option value="">All sensitivities</option>{['High','Medium','Low'].map(v=><option key={v}>{v}</option>)}</select>
+      <select aria-label="Filter status" className={selectClass} value={filters.status} onChange={e=>setFilter('status',e.target.value)}><option value="">All statuses</option>{['Active','Expiring Soon','Expired'].map(v=><option key={v}>{v}</option>)}</select>
+      <select aria-label="Filter expiry window" className={selectClass} value={filters.expiry} onChange={e=>setFilter('expiry',e.target.value)}><option value="">Any expiry date</option><option value="expired">Past due</option><option value="30">Within 30 days</option><option value="90">31–90 days</option></select>
+      <select aria-label="Filter purpose mismatch" className={selectClass} value={filters.mismatch} onChange={e=>setFilter('mismatch',e.target.value)}><option value="">Any purpose status</option><option value="true">Mismatch flagged</option><option value="false">No mismatch</option></select>
+      <select aria-label="Filter recommendation" className={selectClass} value={filters.recommendation} onChange={e=>setFilter('recommendation',e.target.value)}><option value="">All recommendations</option>{['KEEP','REVIEW','ANONYMIZE','DELETE'].map(v=><option key={v}>{v}</option>)}</select>
+    </div><p className="mt-3 text-xs text-slate-500">{visible.length} of {records.length} records · filtering uses fields returned by the records API</p></section>
+    <section className="overflow-hidden rounded-xl border border-slate-800 bg-slate-950">{loading ? <div className="p-14 text-center text-slate-400">Loading records…</div> : error ? <div role="alert" className="p-10 text-center text-rose-300">{error}<button onClick={load} className="ml-3 underline">Try again</button></div> : visible.length === 0 ? <div className="p-14 text-center text-slate-400">No records match these filters.</div> : <div className="overflow-x-auto"><table className="w-full min-w-[1150px] text-left text-sm"><thead className="border-b border-slate-800 bg-slate-900/80 text-xs uppercase tracking-wide text-slate-400"><tr>{['Record','Category / type','Sensitivity','Collection purpose','Current usage','Created','Expiry','Status','Recommendation'].map(h=><th key={h} className="px-4 py-3 font-medium">{h}</th>)}</tr></thead><tbody className="divide-y divide-slate-800/80">{visible.map(r=><tr key={r.id} className="hover:bg-slate-900/60"><td className="px-4 py-4"><Link className="font-mono font-semibold text-sky-400 hover:underline" to={`/records?id=${encodeURIComponent(r.record_id)}`}>{r.record_id}</Link></td><td className="px-4 py-4"><div className="font-medium text-slate-200">{r.category}</div><div className="text-xs text-slate-500">{r.data_type}</div></td><td className="px-4 py-4"><span className={badge(r.sensitivity)}>{r.sensitivity}</span></td><td className="max-w-56 px-4 py-4 text-slate-300">{r.collection_purpose}</td><td className="max-w-56 px-4 py-4 text-slate-400">{r.current_usage}</td><td className="whitespace-nowrap px-4 py-4 text-slate-400">{r.created_date}</td><td className="whitespace-nowrap px-4 py-4 text-slate-300">{r.expiry_date}</td><td className="px-4 py-4"><span className={badge(r.status)}>{r.status}</span></td><td className="px-4 py-4">{r.ai_recommendation ? <span className={badge(r.ai_recommendation)}>{r.ai_recommendation}</span> : <span className="text-slate-500">Not provided</span>}</td></tr>)}</tbody></table></div>}</section>
+  </div>;
 };

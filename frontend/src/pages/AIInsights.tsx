@@ -1,54 +1,17 @@
-import React from 'react';
-import { Sparkles, Brain, Cpu, Bot } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Sparkles, Search, RefreshCw } from 'lucide-react';
+import { apiService } from '../services/api';
+import { DataRecord } from '../types';
 
 export const AIInsights: React.FC = () => {
-  return (
-    <div className="space-y-6">
-      {/* Title */}
-      <div>
-        <div className="inline-flex items-center gap-2 text-xs font-mono font-semibold px-2.5 py-1 rounded bg-purple-950 text-purple-300 border border-purple-800 mb-2">
-          ASSIGNED TO TEAM MEMBER 2 (AI & INSIGHTS)
-        </div>
-        <h1 className="text-3xl font-bold tracking-tight text-slate-100">AI Data Lifecycle Insights</h1>
-        <p className="text-slate-400 mt-1">LLM-assisted recommendations (KEEP, REVIEW, ANONYMIZE, DELETE) and risk reasoning.</p>
-      </div>
-
-      {/* Module Handoff Banner */}
-      <div className="p-6 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
-        <div className="flex items-center gap-3 text-purple-400 font-semibold">
-          <Sparkles className="w-5 h-5" />
-          <span>Module Shell — Ready for Team Member 2 AI Module</span>
-        </div>
-        <p className="text-sm text-slate-400 leading-relaxed">
-          Team Member 2 will connect this page to LLM endpoints to display automated lifecycle actions (`KEEP`, `REVIEW`, `ANONYMIZE`, `DELETE`) with natural language explanations.
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2">
-          <div className="p-4 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
-            <span className="text-xs font-mono text-emerald-400">Recommendation</span>
-            <h3 className="font-bold text-slate-200">KEEP</h3>
-            <p className="text-xs text-slate-400">Valid retention period & compliant usage.</p>
-          </div>
-
-          <div className="p-4 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
-            <span className="text-xs font-mono text-amber-400">Recommendation</span>
-            <h3 className="font-bold text-slate-200">REVIEW</h3>
-            <p className="text-xs text-slate-400">Approaching expiry or minor usage ambiguity.</p>
-          </div>
-
-          <div className="p-4 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
-            <span className="text-xs font-mono text-purple-400">Recommendation</span>
-            <h3 className="font-bold text-slate-200">ANONYMIZE</h3>
-            <p className="text-xs text-slate-400">Strip PII while preserving analytical value.</p>
-          </div>
-
-          <div className="p-4 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
-            <span className="text-xs font-mono text-rose-400">Recommendation</span>
-            <h3 className="font-bold text-slate-200">DELETE</h3>
-            <p className="text-xs text-slate-400">Expired record or critical purpose violation.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  const [records,setRecords]=useState<DataRecord[]>([]);const [loading,setLoading]=useState(true);const [error,setError]=useState('');const [query,setQuery]=useState('');
+  const load=()=>{setLoading(true);setError('');apiService.getDataRecords({limit:500}).then(setRecords).catch(e=>setError(e.message||'Unable to load AI insight fields.')).finally(()=>setLoading(false));};useEffect(load,[]);
+  const insights=useMemo(()=>records.filter(r=>r.ai_recommendation||r.ai_explanation||r.risk_level||r.purpose_mismatch).filter(r=>!query||`${r.record_id} ${r.data_type} ${r.category}`.toLowerCase().includes(query.toLowerCase())),[records,query]);
+  const provided=insights.filter(r=>r.ai_recommendation||r.ai_explanation).length;
+  return <div className="space-y-6"><header className="flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-[.18em] text-violet-400">Governance · Decision support</p><h1 className="text-3xl font-bold text-white">AI insights</h1><p className="mt-1 text-sm text-slate-400">Classification, risk context, and lifecycle recommendations returned with record metadata.</p></div><button onClick={load} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"><RefreshCw size={15}/> Refresh</button></header>
+    <div className="flex items-start gap-3 rounded-xl border border-violet-900/70 bg-violet-950/20 p-4"><Sparkles size={18} className="mt-0.5 shrink-0 text-violet-300"/><p className="text-sm text-violet-100">Insight fields are read from the record API. Missing fields are shown as unavailable; this page does not invent classifications or recommendations.</p></div>
+    <label className="relative block max-w-md"><Search size={16} className="absolute left-3 top-3 text-slate-500"/><input aria-label="Search insights" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search record or data type…" className="w-full rounded-lg border border-slate-700 bg-slate-950 py-2 pl-9 pr-3 text-sm text-white placeholder:text-slate-500"/></label>
+    {loading?<div className="rounded-xl border border-slate-800 bg-slate-950 p-14 text-center text-slate-400">Loading AI fields…</div>:error?<div role="alert" className="rounded-xl border border-rose-900 bg-rose-950/30 p-10 text-center text-rose-300">{error}<button onClick={load} className="ml-3 underline">Try again</button></div>:insights.length===0?<div className="rounded-xl border border-slate-800 bg-slate-950 p-12 text-center"><Sparkles className="mx-auto mb-3 text-slate-500"/><h2 className="font-semibold text-white">{records.length?'No AI insight fields available':'No records available'}</h2><p className="mt-1 text-sm text-slate-400">{records.length?'The records API has not returned classification, risk, or recommendation fields yet.':'Connect the backend API to display record insights.'}</p></div>:<><p className="text-xs text-slate-500">{provided} records include a recommendation or explanation.</p><div className="grid gap-4 lg:grid-cols-2">{insights.map(r=><article key={r.id} className="rounded-xl border border-slate-800 bg-slate-950 p-5"><div className="flex items-start justify-between gap-3"><div><Link to={`/records?id=${encodeURIComponent(r.record_id)}`} className="font-mono text-sm font-semibold text-sky-400 hover:underline">{r.record_id}</Link><h2 className="mt-1 font-semibold text-white">{r.data_type}</h2></div><span className="rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs text-slate-300">{r.sensitivity} sensitivity</span></div><div className="mt-4 grid grid-cols-2 gap-3"><div className="rounded-lg bg-slate-900 p-3"><p className="text-xs text-slate-500">Classification</p><p className="mt-1 text-sm text-slate-200">{r.category}</p></div><div className="rounded-lg bg-slate-900 p-3"><p className="text-xs text-slate-500">Risk</p><p className="mt-1 text-sm text-slate-200">{r.risk_level || 'Not provided'}</p></div></div><div className="mt-3"><p className="text-xs text-slate-500">Purpose mismatch</p><p className="mt-1 text-sm text-slate-200">{r.purpose_mismatch===undefined?'Not assessed':r.purpose_mismatch?'Flagged':'Not flagged'}</p></div><div className="mt-3"><p className="text-xs text-slate-500">Recommendation</p><p className="mt-1 inline-flex rounded-full border border-violet-800 bg-violet-950/50 px-2.5 py-1 text-xs font-semibold text-violet-200">{r.ai_recommendation || 'Not provided'}</p></div><div className="mt-4 border-t border-slate-800 pt-3"><p className="text-xs text-slate-500">Risk explanation</p><p className="mt-1 text-sm leading-relaxed text-slate-300">{r.ai_explanation || 'Explanation not provided by the API.'}</p></div></article>)}</div></>}
+  </div>;
 };

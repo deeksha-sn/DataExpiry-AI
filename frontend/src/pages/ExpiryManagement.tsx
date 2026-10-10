@@ -1,48 +1,22 @@
-import React from 'react';
-import { Clock, AlertCircle, ShieldAlert, ArrowRight } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { apiService } from '../services/api';
+import { DataRecord } from '../types';
+import { Clock, CheckCircle2, AlertTriangle, RefreshCw } from 'lucide-react';
+
+const lanes = [
+  { title: 'Expiring soon', description: 'Retention deadline approaching', icon: Clock, test: (r: DataRecord) => r.status === 'Expiring Soon', tone: 'text-amber-400' },
+  { title: 'Expired', description: 'Past the recorded expiry date', icon: AlertTriangle, test: (r: DataRecord) => r.status === 'Expired', tone: 'text-rose-400' },
+  { title: 'Review required', description: 'Review recommendation or pending review', icon: AlertTriangle, test: (r: DataRecord) => r.ai_recommendation === 'REVIEW' || (r.review_status && !['Complete','Completed','Approved'].includes(r.review_status)), tone: 'text-sky-400' },
+  { title: 'Completed', description: 'Marked complete by governance workflow', icon: CheckCircle2, test: (r: DataRecord) => ['Complete','Completed'].includes(r.review_status || '') || ['Complete','Completed'].includes(r.deletion_status || '') || ['Complete','Completed'].includes(r.anonymization_status || ''), tone: 'text-emerald-400' },
+];
 
 export const ExpiryManagement: React.FC = () => {
-  return (
-    <div className="space-y-6">
-      {/* Title */}
-      <div>
-        <div className="inline-flex items-center gap-2 text-xs font-mono font-semibold px-2.5 py-1 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 mb-2">
-          ASSIGNED TO TEAM MEMBER 3
-        </div>
-        <h1 className="text-3xl font-bold tracking-tight text-slate-100">Expiry Management</h1>
-        <p className="text-slate-400 mt-1">Track and manage data retention expiration schedules and deadline alerts.</p>
-      </div>
-
-      {/* Module Handoff Banner */}
-      <div className="p-6 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
-        <div className="flex items-center gap-3 text-emerald-400 font-semibold">
-          <Clock className="w-5 h-5" />
-          <span>Module Shell — Ready for Team Member 3 Development</span>
-        </div>
-        <p className="text-sm text-slate-400 leading-relaxed">
-          This module is designed to display interactive timelines, upcoming expiration notifications, and bulk action triggers for records reaching their mandated retention deadlines.
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-          <div className="p-4 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
-            <span className="text-xs font-mono text-slate-400">Target Feature 1</span>
-            <h3 className="font-semibold text-slate-200">Interactive Expiry Calendar</h3>
-            <p className="text-xs text-slate-400">Visualize retention deadlines across month/year views.</p>
-          </div>
-
-          <div className="p-4 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
-            <span className="text-xs font-mono text-slate-400">Target Feature 2</span>
-            <h3 className="font-semibold text-slate-200">Bulk Review Queue</h3>
-            <p className="text-xs text-slate-400">Queue expired records for batch approval or extension.</p>
-          </div>
-
-          <div className="p-4 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
-            <span className="text-xs font-mono text-slate-400">Target Feature 3</span>
-            <h3 className="font-semibold text-slate-200">Retention Overrides</h3>
-            <p className="text-xs text-slate-400">Handle legal hold exceptions and custom retention extensions.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  const [records, setRecords] = useState<DataRecord[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [queued, setQueued] = useState<string[]>([]);
+  const load = () => { setLoading(true); setError(''); apiService.getDataRecords({ limit: 500 }).then(setRecords).catch(e=>setError(e.message || 'Unable to load records.')).finally(()=>setLoading(false)); };
+  useEffect(load, []);
+  return <div className="space-y-6"><header className="flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-[.18em] text-sky-400">Lifecycle · Retention</p><h1 className="text-3xl font-bold text-white">Expiry management</h1><p className="mt-1 text-sm text-slate-400">Review retention deadlines and route records for governance follow-up.</p></div><button onClick={load} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"><RefreshCw size={15}/> Refresh</button></header>
+    <div className="rounded-lg border border-sky-900/70 bg-sky-950/30 p-4 text-sm text-sky-200">Actions on this page only create a temporary review queue in this browser session. No records are deleted, altered, or sent to a workflow API.</div>
+    {loading ? <div className="rounded-xl border border-slate-800 bg-slate-950 p-14 text-center text-slate-400">Loading retention records…</div> : error ? <div role="alert" className="rounded-xl border border-rose-900 bg-rose-950/30 p-10 text-center text-rose-300">{error}<button onClick={load} className="ml-3 underline">Try again</button></div> : <div className="grid gap-4 xl:grid-cols-2">{lanes.map(lane=>{const Icon=lane.icon;const items=records.filter(lane.test);return <section key={lane.title} className="overflow-hidden rounded-xl border border-slate-800 bg-slate-950"><div className="flex items-center justify-between border-b border-slate-800 p-5"><div className="flex items-center gap-3"><Icon className={lane.tone} size={19}/><div><h2 className="font-semibold text-white">{lane.title}</h2><p className="text-xs text-slate-500">{lane.description}</p></div></div><span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs text-slate-300">{items.length}</span></div>{items.length ? <ul className="divide-y divide-slate-800/80">{items.map(r=><li key={r.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div className="min-w-0"><Link to={`/records?id=${encodeURIComponent(r.record_id)}`} className="font-mono text-sm font-semibold text-sky-400 hover:underline">{r.record_id}</Link><p className="truncate text-sm text-slate-200">{r.data_type} <span className="text-slate-500">· {r.category}</span></p><p className="mt-1 text-xs text-slate-500">Expiry {r.expiry_date} · {r.ai_recommendation || 'No recommendation'}</p></div>{lane.title !== 'Completed' && <button disabled={queued.includes(r.record_id)} onClick={()=>setQueued(q=>q.includes(r.record_id)?q:[...q,r.record_id])} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:border-sky-700 hover:text-sky-300 disabled:cursor-default disabled:text-emerald-400">{queued.includes(r.record_id)?'Queued for review':'Queue review'}</button>}</li>)}</ul> : <p className="p-8 text-center text-sm text-slate-500">No records in this section.</p>}</section>})}</div>}
+  </div>;
 };
