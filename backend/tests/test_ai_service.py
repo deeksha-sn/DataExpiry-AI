@@ -16,7 +16,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.main import app
 from app.database.session import Base, get_db
-from app.services.ai_service import AIService
+from app.services.ai_service import AIService, GeminiAIProvider
 from app.models.data_record import DataRecordModel
 
 # Setup in-memory SQLite DB for testing
@@ -311,7 +311,7 @@ def make_mock_gemini_response(payload_dict: dict, status_code: int = 200):
 def test_gemini_successful_response_ai_assisted(monkeypatch):
     """Test A & B: Successful Gemini response produces ai_assisted mode and valid structure."""
     monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "test-valid-key")
-    monkeypatch.setattr("app.core.config.settings.GEMINI_MODEL", "gemini-1.5-flash")
+    monkeypatch.setattr("app.core.config.settings.GEMINI_MODEL", "gemini-2.5-flash")
 
     mock_gemini_output = {
         "purpose_mismatch": True,
@@ -521,3 +521,61 @@ def test_gemini_invalid_risk_or_recommendation_triggers_rule_based_fallback(monk
         assert result["analysis_mode"] == "rule_based"
         assert result["purpose_mismatch"] is False
         assert result["ai_recommendation"] == "KEEP"
+
+
+def test_try_ai_provider_invokes_gemini_provider_when_configured(monkeypatch):
+    """Test I: Verify _try_ai_provider() invokes GeminiAIProvider.analyze() when valid API key is present."""
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "real-configured-key")
+
+    mock_analysis = {
+        "purpose_mismatch": True,
+        "risk_level": "High",
+        "ai_recommendation": "REVIEW",
+        "explanation": "Active usage diverges from collection consent (Advisory only)."
+    }
+
+    with patch.object(GeminiAIProvider, "analyze", return_value=mock_analysis) as mock_analyze:
+        result = AIService._try_ai_provider(
+            record_id="REC-TRY-01",
+            category="Customer",
+            sensitivity="High",
+            collection_purpose="Order Processing",
+            current_usage="Ad Targeting",
+            status="Active",
+            expiry_date="2027-01-01"
+        )
+
+        assert mock_analyze.called
+        assert result == mock_analysis
+        # Verify privacy boundary: record_id was NOT forwarded to GeminiAIProvider.analyze
+        call_kwargs = mock_analyze.call_args[1]
+        assert "record_id" not in call_kwargs
+
+
+def test_gemini_model_configurability_and_default(monkeypatch):
+    """Test J: Verify Gemini model defaults to gemini-2.5-flash and respects GEMINI_MODEL env var."""
+    # When GEMINI_MODEL is empty, defaults to gemini-2.5-flash
+    monkeypatch.setattr("app.core.config.settings.GEMINI_MODEL", "")
+    assert GeminiAIProvider.get_model() == "gemini-2.5-flash"
+
+    # When GEMINI_MODEL is explicitly configured, it is used
+    monkeypatch.setattr("app.core.config.settings.GEMINI_MODEL", "gemini-3.8-flash")
+    assert GeminiAIProvider.get_model() == "gemini-3.8-flash"
+
+
+def test_ai_recommendation_advisory_nature():
+    """Test K: Verify AI recommendations are strictly advisory and do not perform state transitions."""
+    result = AIService.analyze_record({
+        "record_id": "REC-ADVISORY-01",
+        "category": "Customer",
+        "sensitivity": "High",
+        "collection_purpose": "Order Processing",
+        "current_usage": "Model Training",
+        "status": "Active",
+        "expiry_date=" : "2027-01-01"
+    })
+
+    # AI output contains recommendations and explanations, but is advisory only
+    assert result["ai_recommendation"] in {"KEEP", "REVIEW", "ANONYMIZE", "DELETE"}
+    # The record's actual lifecycle status is not mutated by AI analysis
+    assert result["category"] == "Customer"

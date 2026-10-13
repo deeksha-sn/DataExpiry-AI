@@ -109,7 +109,7 @@ HIGH_RISK_CREEP_SIGNALS: Dict[str, Dict[str, Any]] = {
 
 VALID_RISK_LEVELS: Set[str] = {"Low", "Medium", "High", "Critical"}
 VALID_RECOMMENDATIONS: Set[str] = {"KEEP", "REVIEW", "ANONYMIZE", "DELETE"}
-DEFAULT_GEMINI_MODEL: str = "gemini-1.5-flash"
+DEFAULT_GEMINI_MODEL: str = "gemini-2.5-flash"
 GEMINI_API_ENDPOINT_TEMPLATE: str = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
@@ -131,7 +131,7 @@ class GeminiAIProvider:
 
     @classmethod
     def get_model(cls) -> str:
-        """Retrieves configured Gemini model name, defaulting to gemini-1.5-flash."""
+        """Retrieves configured Gemini model name, defaulting to gemini-2.5-flash."""
         model = getattr(settings, "GEMINI_MODEL", "").strip()
         return model if model else DEFAULT_GEMINI_MODEL
 
@@ -651,6 +651,10 @@ class AIService:
         Returns None on any network failure, timeout, invalid schema, or missing API key,
         instantly falling back to the deterministic rule-based engine.
         """
+        if not GeminiAIProvider.is_available():
+            logger.debug("Gemini AI provider not configured. Using deterministic rule-based analysis.")
+            return None
+
         return GeminiAIProvider.analyze(
             category=category,
             sensitivity=sensitivity,
