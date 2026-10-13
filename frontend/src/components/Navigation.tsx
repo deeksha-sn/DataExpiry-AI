@@ -16,23 +16,26 @@ interface NavItem {
   name: string;
   path: string;
   icon: React.ElementType;
-  owner: string;
+}
+
+interface NavigationProps {
+  apiState: 'checking' | 'connected' | 'disconnected';
 }
 
 const navItems: NavItem[] = [
-  { name: 'Dashboard', path: '/', icon: LayoutDashboard, owner: 'Foundation' },
-  { name: 'Data Inventory', path: '/inventory', icon: Database, owner: 'Team 3' },
-  { name: 'Record Details', path: '/records', icon: FileText, owner: 'Team 3' },
-  { name: 'Expiry Management', path: '/expiry', icon: Clock, owner: 'Team 3' },
-  { name: 'Purpose Mismatch', path: '/purpose-mismatch', icon: AlertTriangle, owner: 'Team 2' },
-  { name: 'AI Insights', path: '/ai-insights', icon: Sparkles, owner: 'Team 2' },
-  { name: 'Policy Management', path: '/policy', icon: ShieldCheck, owner: 'Team 4' },
-  { name: 'Audit Trail', path: '/audit', icon: History, owner: 'Team 4' },
+  { name: 'Dashboard', path: '/', icon: LayoutDashboard },
+  { name: 'Data Inventory', path: '/inventory', icon: Database },
+  { name: 'Record Details', path: '/records', icon: FileText },
+  { name: 'Expiry Management', path: '/expiry', icon: Clock },
+  { name: 'Purpose Mismatch', path: '/purpose-mismatch', icon: AlertTriangle },
+  { name: 'AI Insights', path: '/ai-insights', icon: Sparkles },
+  { name: 'Policy Management', path: '/policy', icon: ShieldCheck },
+  { name: 'Audit Trail', path: '/audit', icon: History },
 ];
 
-export const Navigation: React.FC = () => {
+export const Navigation: React.FC<NavigationProps> = ({ apiState }) => {
   return (
-    <aside className="w-64 bg-slate-950 border-r border-slate-800 flex flex-col justify-between min-h-screen">
+    <aside className="flex w-full shrink-0 flex-col justify-between border-b border-slate-800 bg-slate-950 lg:min-h-screen lg:w-64 lg:border-b-0 lg:border-r">
       <div>
         {/* Brand Header */}
         <div className="p-6 border-b border-slate-800 flex items-center gap-3">
@@ -46,7 +49,7 @@ export const Navigation: React.FC = () => {
         </div>
 
         {/* Navigation Items */}
-        <nav className="p-4 space-y-1.5">
+        <nav className="flex gap-1 overflow-x-auto p-3 lg:block lg:space-y-1.5 lg:p-4">
           {navItems.map((item) => {
             const Icon = item.icon;
             return (
@@ -54,7 +57,7 @@ export const Navigation: React.FC = () => {
                 key={item.path}
                 to={item.path}
                 className={({ isActive }) =>
-                  `flex items-center justify-between px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                  `flex shrink-0 items-center justify-between rounded-lg px-3.5 py-2.5 text-sm font-medium transition-all ${
                     isActive
                       ? 'bg-sky-600/20 text-sky-400 border border-sky-500/30'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
@@ -65,14 +68,6 @@ export const Navigation: React.FC = () => {
                   <Icon className="w-4 h-4 shrink-0" />
                   <span>{item.name}</span>
                 </div>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                  item.owner === 'Foundation' ? 'bg-sky-950 text-sky-300 border border-sky-800' :
-                  item.owner === 'Team 2' ? 'bg-purple-950 text-purple-300 border border-purple-800' :
-                  item.owner === 'Team 3' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' :
-                  'bg-amber-950 text-amber-300 border border-amber-800'
-                }`}>
-                  {item.owner}
-                </span>
               </NavLink>
             );
           })}
@@ -80,16 +75,16 @@ export const Navigation: React.FC = () => {
       </div>
 
       {/* Footer System Info */}
-      <div className="p-4 m-4 rounded-xl bg-slate-900/80 border border-slate-800 text-xs text-slate-400 space-y-1">
+      <div className="m-3 hidden rounded-xl border border-slate-800 bg-slate-900/80 p-4 text-xs text-slate-400 lg:block">
         <div className="flex items-center justify-between">
           <span className="text-slate-500">System Mode</span>
-          <span className="text-sky-400 font-mono">Demo / Synthetic</span>
+            <span className="text-sky-400 font-mono">Governance</span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-slate-500">API Status</span>
-          <span className="inline-flex items-center gap-1.5 text-emerald-400">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            Connected
+          <span className={`inline-flex items-center gap-1.5 font-medium ${apiState === 'connected' ? 'text-emerald-400' : apiState === 'checking' ? 'text-amber-400' : 'text-rose-400'}`}>
+            <span className={`w-2 h-2 rounded-full ${apiState === 'connected' ? 'bg-emerald-400' : apiState === 'checking' ? 'bg-amber-400 animate-pulse' : 'bg-rose-400'}`}></span>
+            {apiState === 'connected' ? 'Connected' : apiState === 'checking' ? 'Checking' : 'Disconnected'}
           </span>
         </div>
       </div>
