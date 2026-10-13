@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 class DataRecordBase(BaseModel):
@@ -62,3 +62,31 @@ class HealthResponse(BaseModel):
     status: str = Field(..., json_schema_extra={"example": "ok"})
     service: str = Field(..., json_schema_extra={"example": "DATAEXPIRY API"})
     version: Optional[str] = Field(None, json_schema_extra={"example": "1.0.0"})
+
+class PurposeMismatchCheckRequest(BaseModel):
+    collection_purpose: str = Field(..., min_length=1, json_schema_extra={"example": "Order Processing & Delivery"})
+    current_usage: str = Field(..., min_length=1, json_schema_extra={"example": "Targeted Marketing Campaigns"})
+    category: Optional[str] = Field("Customer", json_schema_extra={"example": "Customer"})
+    sensitivity: Optional[str] = Field("Medium", json_schema_extra={"example": "High"})
+    status: Optional[str] = Field("Active", json_schema_extra={"example": "Active"})
+    expiry_date: Optional[str] = Field("2026-12-31", json_schema_extra={"example": "2026-12-31"})
+
+class PurposeMismatchResult(BaseModel):
+    record_id: Optional[str] = None
+    category: str
+    sensitivity: str
+    collection_purpose: str
+    current_usage: str
+    purpose_mismatch: bool
+    risk_level: str
+    ai_recommendation: str
+    explanation: str
+    analysis_mode: str
+
+class BatchAIAnalysisResponse(BaseModel):
+    total_analyzed: int
+    potential_mismatches: int
+    records_requiring_review: int
+    recommendations: Dict[str, int]
+    risk_breakdown: Dict[str, int]
+    records: List[PurposeMismatchResult]
