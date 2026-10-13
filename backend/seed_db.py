@@ -11,6 +11,13 @@ import sys
 # Add backend directory to python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 from app.database.session import SessionLocal, engine, Base
 from app.models.data_record import DataRecordModel
 
@@ -61,6 +68,60 @@ def seed_database():
         db.commit()
         total_count = db.query(DataRecordModel).count()
         print(f"✅ Seeding complete! Inserted: {inserted}, Skipped (already exist): {skipped}, Total Records in DB: {total_count}")
+
+        # Seed demonstration retention policies
+        demo_policies = [
+            {
+                "rule_code": "POL-CUS-01",
+                "name": "Customer Retention Demo Policy",
+                "category": "Customer",
+                "retention_period": "2 years",
+                "retention_days": 730,
+                "action_on_expiry": "REVIEW",
+                "description": "Demonstration retention policy for customer records (2 years -> REVIEW)",
+                "is_active": True
+            },
+            {
+                "rule_code": "POL-TXN-01",
+                "name": "Transaction Retention Demo Policy",
+                "category": "Transaction",
+                "retention_period": "3 years",
+                "retention_days": 1095,
+                "action_on_expiry": "REVIEW",
+                "description": "Demonstration retention policy for transaction records (3 years -> REVIEW)",
+                "is_active": True
+            },
+            {
+                "rule_code": "POL-MKT-01",
+                "name": "Marketing Retention Demo Policy",
+                "category": "Marketing",
+                "retention_period": "1 year",
+                "retention_days": 365,
+                "action_on_expiry": "DELETE",
+                "description": "Demonstration retention policy for marketing records (1 year -> DELETE)",
+                "is_active": True
+            }
+        ]
+
+        print("📋 Checking demonstration retention policies...")
+        from app.models.policy import PolicyRuleModel
+        pol_inserted = 0
+        pol_skipped = 0
+        for pol_data in demo_policies:
+            existing_pol = db.query(PolicyRuleModel).filter(
+                PolicyRuleModel.rule_code == pol_data["rule_code"]
+            ).first()
+            if not existing_pol:
+                db_pol = PolicyRuleModel(**pol_data)
+                db.add(db_pol)
+                pol_inserted += 1
+            else:
+                pol_skipped += 1
+
+        db.commit()
+        total_policies = db.query(PolicyRuleModel).count()
+        print(f"✅ Policy seeding complete! Inserted: {pol_inserted}, Skipped: {pol_skipped}, Total Policies: {total_policies}")
+
 
     except Exception as e:
         db.rollback()
