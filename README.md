@@ -116,12 +116,14 @@ DataExpiry/
 
 ## 👥 Team Structure & Responsibilities
 
-| Role | Developer | Responsibilities & Focus Area | Branch |
-| :--- | :--- | :--- | :--- |
-| **Person 1** | **Foundation Lead** | Project structure, DB schema, FastAPI foundation, Synthetic dataset, Frontend shell & API service | `feature/person1-foundation` |
-| **Person 2** | **AI & Insights Lead** | Purpose mismatch engine, AI risk analyzer, LLM integration, recommendation generator | `feature/person2-ai` |
-| **Person 3** | **Frontend & UX Lead** | Interactive dashboard, rich data tables, record detail modal, expiry management UI | `feature/person3-frontend` |
-| **Person 4** | **Policy & Audit Lead** | Policy rules engine, automated anonymization/deletion workflows, compliance audit log | `feature/person4-policy-audit` |
+| Member | Role | Contribution |
+|---|---|---|
+| Deeksha SN | Project Setup & Integration | Backend setup, database setup, frontend setup, code integration, debugging, testing, Git and GitHub management |
+| Ananya E Gowda | AI & Insights | AI-assisted data analysis, purpose mismatch detection, AI insights |
+| Jnanika S S | Frontend Development | Dashboard, data inventory, search, filters, expiry management |
+| Jestavi C | Policy & Audit | Retention policies, lifecycle actions, audit logging |
+| Nathin | API Integration & Deployment | API integration, API communication, Linux setup, deployment |
+| Manoj | API Integration & Deployment | API integration, API communication, Linux setup, deployment |
 
 ---
 
