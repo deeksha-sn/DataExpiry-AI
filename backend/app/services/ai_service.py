@@ -109,7 +109,7 @@ HIGH_RISK_CREEP_SIGNALS: Dict[str, Dict[str, Any]] = {
 
 VALID_RISK_LEVELS: Set[str] = {"Low", "Medium", "High", "Critical"}
 VALID_RECOMMENDATIONS: Set[str] = {"KEEP", "REVIEW", "ANONYMIZE", "DELETE"}
-DEFAULT_GEMINI_MODEL: str = "gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL: str = "gemini-3.5-flash-lite"
 GEMINI_API_ENDPOINT_TEMPLATE: str = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
@@ -131,9 +131,13 @@ class GeminiAIProvider:
 
     @classmethod
     def get_model(cls) -> str:
-        """Retrieves configured Gemini model name, defaulting to gemini-2.5-flash."""
-        model = getattr(settings, "GEMINI_MODEL", "").strip()
-        return model if model else DEFAULT_GEMINI_MODEL
+        """Retrieves configured Gemini model name, defaulting to gemini-3.5-flash-lite."""
+        model = getattr(settings, "GEMINI_MODEL", "").strip().strip('"').strip("'")
+        if not model:
+            model = DEFAULT_GEMINI_MODEL
+        if model.startswith("models/"):
+            model = model[len("models/"):]
+        return model
 
     @classmethod
     def is_available(cls) -> bool:
@@ -332,8 +336,14 @@ class GeminiAIProvider:
                 response = client.post(url, headers=headers, json=payload)
 
             if response.status_code != 200:
+                safe_body = (response.text or "").strip()
+                if api_key and api_key in safe_body:
+                    safe_body = safe_body.replace(api_key, "[REDACTED]")
+                if len(safe_body) > 250:
+                    safe_body = safe_body[:250] + "... (truncated)"
+                safe_body = safe_body.replace("\n", " ") if safe_body else "<empty response>"
                 logger.warning(
-                    f"Gemini API request failed with HTTP status {response.status_code}. "
+                    f"Gemini API request failed with HTTP status {response.status_code}: {safe_body}. "
                     "Falling back to rule-based engine."
                 )
                 return None

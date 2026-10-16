@@ -41,6 +41,19 @@ app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def isolate_ai_environment(monkeypatch, request):
+    """
+    Ensure automated unit tests run in isolation without making accidental
+    external network calls to Google Gemini API.
+    Rule-based tests run with GEMINI_API_KEY cleared so they evaluate deterministically.
+    Tests specifically testing Gemini provider will set monkeypatch and mock httpx.
+    """
+    if not (request.node.name.startswith("test_gemini_") or request.node.name.startswith("test_try_ai_")):
+        monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "")
+        monkeypatch.setattr("app.core.config.settings.AI_API_KEY", "")
+
+
 # ==============================================================================
 # Unit Tests for Purpose Mismatch Logic & Recommendations
 # ==============================================================================
@@ -311,7 +324,7 @@ def make_mock_gemini_response(payload_dict: dict, status_code: int = 200):
 def test_gemini_successful_response_ai_assisted(monkeypatch):
     """Test A & B: Successful Gemini response produces ai_assisted mode and valid structure."""
     monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "test-valid-key")
-    monkeypatch.setattr("app.core.config.settings.GEMINI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setattr("app.core.config.settings.GEMINI_MODEL", "gemini-3.5-flash-lite")
 
     mock_gemini_output = {
         "purpose_mismatch": True,
@@ -553,14 +566,18 @@ def test_try_ai_provider_invokes_gemini_provider_when_configured(monkeypatch):
 
 
 def test_gemini_model_configurability_and_default(monkeypatch):
-    """Test J: Verify Gemini model defaults to gemini-2.5-flash and respects GEMINI_MODEL env var."""
-    # When GEMINI_MODEL is empty, defaults to gemini-2.5-flash
+    """Test J: Verify Gemini model defaults to gemini-3.5-flash-lite and respects GEMINI_MODEL env var."""
+    # When GEMINI_MODEL is empty, defaults to gemini-3.5-flash-lite
     monkeypatch.setattr("app.core.config.settings.GEMINI_MODEL", "")
-    assert GeminiAIProvider.get_model() == "gemini-2.5-flash"
+    assert GeminiAIProvider.get_model() == "gemini-3.5-flash-lite"
 
     # When GEMINI_MODEL is explicitly configured, it is used
     monkeypatch.setattr("app.core.config.settings.GEMINI_MODEL", "gemini-3.8-flash")
     assert GeminiAIProvider.get_model() == "gemini-3.8-flash"
+
+    # When model has 'models/' prefix, it is normalized
+    monkeypatch.setattr("app.core.config.settings.GEMINI_MODEL", "models/gemini-3.5-flash-lite")
+    assert GeminiAIProvider.get_model() == "gemini-3.5-flash-lite"
 
 
 def test_ai_recommendation_advisory_nature():
@@ -579,3 +596,176 @@ def test_ai_recommendation_advisory_nature():
     assert result["ai_recommendation"] in {"KEEP", "REVIEW", "ANONYMIZE", "DELETE"}
     # The record's actual lifecycle status is not mutated by AI analysis
     assert result["category"] == "Customer"
+
+
+def test_gemini_request_construction_endpoint_and_headers(monkeypatch):
+    """Test L: Verify exact REST API URL, headers, and payload construction match Google Gemini spec."""
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "test-secret-key-12345")
+    monkeypatch.setattr("app.core.config.settings.GEMINI_MODEL", "gemini-3.5-flash-lite")
+
+    mock_resp = make_mock_gemini_response({
+        "purpose_mismatch": False,
+        "risk_level": "Low",
+        "ai_recommendation": "KEEP",
+        "explanation": "Compliant usage."
+    })
+
+    with patch("httpx.Client.post", return_value=mock_resp) as mock_post:
+        res = GeminiAIProvider.analyze(
+            category="Operational",
+            sensitivity="Medium",
+            collection_purpose="Server Maintenance",
+            current_usage="Server Log Diagnostics",
+            status="Active",
+            expiry_date="2027-12-31"
+        )
+
+        assert res is not None
+        assert mock_post.called
+        args, kwargs = mock_post.call_args
+
+        # 1. Endpoint URL verification
+        url = args[0] if args else kwargs.get("url", "")
+        expected_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent"
+        assert url == expected_url
+
+        # 2. Header verification
+        headers = kwargs.get("headers", {})
+        assert headers.get("Content-Type") == "application/json"
+        assert headers.get("x-goog-api-key") == "test-secret-key-12345"
+
+        # 3. Payload and generationConfig verification
+        json_payload = kwargs.get("json", {})
+        assert "contents" in json_payload
+        assert len(json_payload["contents"]) == 1
+        parts = json_payload["contents"][0]["parts"]
+        assert len(parts) == 1
+        assert "text" in parts[0]
+        assert "generationConfig" in json_payload
+        assert json_payload["generationConfig"].get("responseMimeType") == "application/json"
+
+
+def test_gemini_http_404_failure_logging_and_fallback(monkeypatch, caplog):
+    """Test M: Verify HTTP 404 error (e.g. unavailable model) logs safely and falls back to rule-based engine."""
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "test-secret-key-404")
+    monkeypatch.setattr("app.core.config.settings.GEMINI_MODEL", "gemini-2.5-flash")
+
+    error_body = {
+        "error": {
+            "code": 404,
+            "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/gemini-3.8-flash.",
+            "status": "NOT_FOUND"
+        }
+    }
+    mock_resp = MagicMock()
+    mock_resp.status_code = 404
+    mock_resp.text = json.dumps(error_body)
+    mock_resp.json.return_value = error_body
+
+    with patch("httpx.Client.post", return_value=mock_resp):
+        result = AIService.analyze_record({
+            "record_id": "REC-404-TEST",
+            "category": "Customer",
+            "sensitivity": "High",
+            "collection_purpose": "Order Delivery",
+            "current_usage": "Targeted Marketing Ads",
+            "status": "Active",
+            "expiry_date": "2027-01-01"
+        })
+
+        # Rule-based fallback executes
+        assert result["analysis_mode"] == "rule_based"
+        assert result["purpose_mismatch"] is True
+
+        # Diagnostic log contains status 404 and safely truncated message
+        assert any(
+            "HTTP status 404" in record.message and "is no longer available to new users" in record.message
+            for record in caplog.records
+        )
+        # Verify secret was NEVER logged
+        for record in caplog.records:
+            assert "test-secret-key-404" not in record.message
+
+
+def test_gemini_http_503_service_unavailable_fallback(monkeypatch, caplog):
+    """Test N: Verify HTTP 503 high demand spike triggers fallback to rule-based engine."""
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "test-secret-key-503")
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 503
+    mock_resp.text = '{"error": {"code": 503, "message": "This model is currently experiencing high demand."}}'
+
+    with patch("httpx.Client.post", return_value=mock_resp):
+        result = AIService.analyze_record({
+            "record_id": "REC-503-TEST",
+            "category": "Customer",
+            "sensitivity": "Low",
+            "collection_purpose": "Support Desk",
+            "current_usage": "Support Desk",
+            "status": "Active",
+            "expiry_date": "2027-01-01"
+        })
+
+        assert result["analysis_mode"] == "rule_based"
+        assert result["purpose_mismatch"] is False
+        assert any("HTTP status 503" in record.message for record in caplog.records)
+
+
+def test_config_loads_backend_env_from_any_cwd(monkeypatch, tmp_path):
+    """Test O: Verify Settings reliably loads backend/.env regardless of the process current working directory."""
+    import os
+    from app.core.config import Settings
+
+    original_cwd = os.getcwd()
+    try:
+        os.chdir(str(tmp_path))
+        custom_settings = Settings()
+        assert custom_settings.GEMINI_MODEL != ""
+        # Default model is gemini-3.5-flash-lite
+        assert custom_settings.GEMINI_MODEL in {"gemini-3.5-flash-lite", "gemini-3.8-flash"}
+    finally:
+        os.chdir(original_cwd)
+
+
+def test_gemini_analyze_single_record_endpoint_ai_assisted(monkeypatch):
+    """Test P: Verify POST /api/data/{record_id}/analyze returns ai_assisted when provider succeeds."""
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "valid-key-for-endpoint")
+    monkeypatch.setattr("app.core.config.settings.GEMINI_MODEL", "gemini-3.5-flash-lite")
+
+    # Seed test record in testing DB
+    db = TestingSessionLocal()
+    rec = DataRecordModel(
+        record_id="REC-AI-EP-01",
+        data_type="Customer Profile",
+        category="Customer",
+        sensitivity="High",
+        collection_purpose="Account Security",
+        current_usage="Commercial Profiling",
+        owner="Security Team",
+        created_date="2025-01-01",
+        retention_period="3 years",
+        expiry_date="2028-01-01",
+        status="Active",
+        source="Portal"
+    )
+    db.merge(rec)
+    db.commit()
+    db.close()
+
+    mock_gemini_output = {
+        "purpose_mismatch": True,
+        "risk_level": "High",
+        "ai_recommendation": "REVIEW",
+        "explanation": "Commercial profiling exceeds account security consent."
+    }
+
+    with patch.object(GeminiAIProvider, "analyze", return_value=mock_gemini_output):
+        response = client.post("/api/data/REC-AI-EP-01/analyze")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["record_id"] == "REC-AI-EP-01"
+        assert data["analysis_mode"] == "ai_assisted"
+        assert data["purpose_mismatch"] is True
+        assert data["risk_level"] == "High"
+        assert data["ai_recommendation"] == "REVIEW"
+        assert "Commercial profiling" in data["explanation"]
