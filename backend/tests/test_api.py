@@ -30,6 +30,11 @@ app.dependency_overrides[get_db] = override_get_db
 
 client = TestClient(app)
 
+@pytest.fixture(autouse=True)
+def setup_db():
+    app.dependency_overrides[get_db] = override_get_db
+    yield
+
 def test_root_endpoint():
     response = client.get("/")
     assert response.status_code == 200

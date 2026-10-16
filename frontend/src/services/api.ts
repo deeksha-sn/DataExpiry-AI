@@ -1,4 +1,12 @@
-import { DataRecord, DataRecordCreateInput, HealthStatus } from '../types';
+import {
+  DataRecord,
+  DataRecordCreateInput,
+  HealthStatus,
+  PurposeMismatchResult,
+  PurposeMismatchCheckRequest,
+  BatchAIAnalysisResponse,
+  AIGovernanceSummary,
+} from '../types';
 
 const API_BASE_URL = '/api';
 
@@ -66,6 +74,72 @@ class ApiService {
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       throw new Error(errorData.detail || `Failed to create data record.`);
+    }
+    return response.json();
+  }
+
+  /**
+   * Run batch AI purpose mismatch detection across all database records.
+   */
+  async runBatchAiAnalysis(): Promise<BatchAIAnalysisResponse> {
+    const response = await fetch(`${API_BASE_URL}/ai/batch-analyze`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || `Failed to run batch AI analysis.`);
+    }
+    return response.json();
+  }
+
+  /**
+   * Run AI analysis on a single record by record_id.
+   */
+  async analyzeRecord(recordId: string): Promise<PurposeMismatchResult> {
+    const response = await fetch(`${API_BASE_URL}/data/${encodeURIComponent(recordId)}/analyze`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || `Failed to analyze record ${recordId}.`);
+    }
+    return response.json();
+  }
+
+  /**
+   * Interactive sandbox evaluation for purpose vs usage without modifying DB records.
+   */
+  async checkPurposeMismatch(request: PurposeMismatchCheckRequest): Promise<PurposeMismatchResult> {
+    const response = await fetch(`${API_BASE_URL}/ai/check-mismatch`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || `Failed to check purpose mismatch.`);
+    }
+    return response.json();
+  }
+
+  /**
+   * Get high-level AI governance metrics and distributions.
+   */
+  async getAIGovernanceSummary(): Promise<AIGovernanceSummary> {
+    const response = await fetch(`${API_BASE_URL}/ai/summary`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch AI governance summary: ${response.statusText}`);
     }
     return response.json();
   }

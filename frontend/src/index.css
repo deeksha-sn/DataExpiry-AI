@@ -4,6 +4,82 @@
 
 body {
   font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  background-color: #0f172a;
-  color: #f8fafc;
+  background-color: #eaf1f8;
+  color: #0f172a;
 }
+
+/* Restrained graph-paper texture and cool ambient light for the workspace. */
+.min-h-screen.flex {
+  background-color: #eaf1f8 !important;
+  background-image: none;
+}
+
+/* Light workspace palette. Keep the existing utility classes in components,
+   while giving their former dark surfaces readable light equivalents. */
+[class*="bg-slate-950"] {
+  background-color: rgba(255, 255, 255, 0.97) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.025), 0 10px 30px rgba(51, 65, 85, 0.045);
+}
+[class*="bg-slate-900"] { background-color: rgba(248, 250, 252, 0.82) !important; }
+[class~="bg-slate-800"] { background-color: #e2e8f0 !important; }
+[class*="bg-sky-950"] { background-color: #e0f2fe !important; }
+[class*="bg-emerald-950"] { background-color: #dcfce7 !important; }
+[class*="bg-amber-950"] { background-color: #fef3c7 !important; }
+[class*="bg-rose-950"] { background-color: #ffe4e6 !important; }
+[class*="bg-purple-950"], [class*="bg-violet-950"] { background-color: #f3e8ff !important; }
+
+[class~="text-white"], [class~="text-slate-100"], [class~="text-slate-200"] { color: #0f172a !important; }
+[class~="text-slate-300"] { color: #334155 !important; }
+[class~="text-slate-400"] { color: #475569 !important; }
+[class~="text-slate-500"] { color: #64748b !important; }
+[class~="text-sky-100"], [class~="text-sky-200"], [class~="text-sky-300"] { color: #075985 !important; }
+[class~="text-emerald-300"] { color: #047857 !important; }
+[class~="text-amber-300"] { color: #a16207 !important; }
+[class~="text-rose-300"] { color: #be123c !important; }
+[class~="text-purple-300"], [class~="text-violet-100"], [class~="text-violet-200"], [class~="text-violet-300"] { color: #6b21a8 !important; }
+
+[class~="border-slate-800"] { border-color: #e2e8f0 !important; }
+[class~="border-slate-700"] { border-color: #cbd5e1 !important; }
+[class~="border-sky-800"], [class~="border-sky-900/70"] { border-color: #bae6fd !important; }
+[class~="border-emerald-800"] { border-color: #bbf7d0 !important; }
+[class~="border-amber-800"] { border-color: #fde68a !important; }
+[class~="border-rose-800"], [class~="border-rose-900"] { border-color: #fecdd3 !important; }
+[class~="border-purple-800"], [class~="border-violet-800"], [class~="border-violet-900/70"] { border-color: #e9d5ff !important; }
+
+input, select {
+  color-scheme: light;
+}
+
+/* Dark mode overrides the same utility-based surfaces without changing page layouts. */
+.theme-dark.min-h-screen.flex {
+  color-scheme: dark;
+  background-color: #111827 !important;
+  background-image: none;
+}
+.theme-dark [class*="bg-slate-950"] { background-color: rgba(15, 23, 42, 0.96) !important; }
+.theme-dark [class*="bg-slate-900"] { background-color: rgba(17, 28, 46, 0.9) !important; }
+.theme-dark [class~="bg-slate-800"] { background-color: #1e293b !important; }
+.theme-dark [class*="bg-sky-950"] { background-color: rgba(8, 47, 73, 0.72) !important; }
+.theme-dark [class*="bg-emerald-950"] { background-color: rgba(2, 44, 34, 0.72) !important; }
+.theme-dark [class*="bg-amber-950"] { background-color: rgba(69, 26, 3, 0.72) !important; }
+.theme-dark [class*="bg-rose-950"] { background-color: rgba(76, 5, 25, 0.68) !important; }
+.theme-dark [class*="bg-purple-950"], .theme-dark [class*="bg-violet-950"] { background-color: rgba(59, 7, 100, 0.65) !important; }
+
+.theme-dark [class~="text-white"], .theme-dark [class~="text-slate-100"], .theme-dark [class~="text-slate-200"] { color: #f1f5f9 !important; }
+.theme-dark [class~="text-slate-300"] { color: #cbd5e1 !important; }
+.theme-dark [class~="text-slate-400"] { color: #94a3b8 !important; }
+.theme-dark [class~="text-slate-500"] { color: #64748b !important; }
+.theme-dark [class~="text-sky-100"], .theme-dark [class~="text-sky-200"], .theme-dark [class~="text-sky-300"] { color: #bae6fd !important; }
+.theme-dark [class~="text-emerald-300"] { color: #6ee7b7 !important; }
+.theme-dark [class~="text-amber-300"] { color: #fcd34d !important; }
+.theme-dark [class~="text-rose-300"] { color: #fda4af !important; }
+.theme-dark [class~="text-purple-300"], .theme-dark [class~="text-violet-100"], .theme-dark [class~="text-violet-200"], .theme-dark [class~="text-violet-300"] { color: #d8b4fe !important; }
+
+.theme-dark [class~="border-slate-800"] { border-color: #263449 !important; }
+.theme-dark [class~="border-slate-700"] { border-color: #334155 !important; }
+.theme-dark [class~="border-sky-800"], .theme-dark [class~="border-sky-900/70"] { border-color: #075985 !important; }
+.theme-dark [class~="border-emerald-800"] { border-color: #065f46 !important; }
+.theme-dark [class~="border-amber-800"] { border-color: #92400e !important; }
+.theme-dark [class~="border-rose-800"], .theme-dark [class~="border-rose-900"] { border-color: #9f1239 !important; }
+.theme-dark [class~="border-purple-800"], .theme-dark [class~="border-violet-800"], .theme-dark [class~="border-violet-900/70"] { border-color: #6b21a8 !important; }
+.theme-dark input, .theme-dark select { color-scheme: dark; }

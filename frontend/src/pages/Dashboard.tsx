@@ -1,112 +1,30 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { apiService } from '../services/api';
 import { DataRecord } from '../types';
-import { Database, AlertTriangle, Clock, ShieldCheck, ArrowUpRight } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { AlertTriangle, Archive, ArrowRight, Clock3, Database, Eye, ShieldAlert, Sparkles } from 'lucide-react';
+
+const palette = ['bg-sky-400','bg-violet-400','bg-emerald-400','bg-amber-400','bg-rose-400','bg-cyan-400'];
+const Panel: React.FC<{title:string; children:React.ReactNode; link?:string}> = ({title,children,link}) => <section className="rounded-xl border border-slate-800 bg-slate-950 p-5"><div className="mb-5 flex items-center justify-between"><h2 className="font-semibold text-white">{title}</h2>{link && <Link to={link} className="text-xs text-sky-400 hover:underline">View details →</Link>}</div>{children}</section>;
+const Bars: React.FC<{values:[string,number][]}> = ({values}) => { const max=Math.max(1,...values.map(([,n])=>n)); return <div className="space-y-3">{values.length ? values.map(([label,n],i)=><div key={label}><div className="mb-1 flex justify-between text-xs"><span className="text-slate-400">{label}</span><span className="text-slate-300">{n}</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-800"><div className={`h-full rounded-full ${palette[i%palette.length]}`} style={{width:`${Math.max(n?3:0,n/max*100)}%`}}/></div></div>) : <p className="text-sm text-slate-500">No data available.</p>}</div>; };
 
 export const Dashboard: React.FC = () => {
-  const [records, setRecords] = useState<DataRecord[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-
-  useEffect(() => {
-    apiService.getDataRecords()
-      .then(data => {
-        setRecords(data);
-        setLoading(false);
-      })
-      .catch(err => {
-        console.error('Failed to load dashboard records:', err);
-        setLoading(false);
-      });
-  }, []);
-
-  const totalCount = records.length;
-  const expiredCount = records.filter(r => r.status === 'Expired').length;
-  const expiringSoonCount = records.filter(r => r.status === 'Expiring Soon').length;
-  const mismatchCount = records.filter(r => r.purpose_mismatch).length;
-
-  return (
-    <div className="space-y-6">
-      {/* Title Header */}
-      <div>
-        <div className="inline-flex items-center gap-2 text-xs font-mono font-semibold px-2.5 py-1 rounded bg-sky-950 text-sky-400 border border-sky-800 mb-2">
-          FOUNDATION READY
-        </div>
-        <h1 className="text-3xl font-bold tracking-tight text-slate-100">Governance Overview Dashboard</h1>
-        <p className="text-slate-400 mt-1">Real-time enterprise data lifecycle tracking and purpose governance metrics.</p>
-      </div>
-
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="p-5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-sm font-medium">Total Data Records</span>
-            <Database className="w-4 h-4 text-sky-400" />
-          </div>
-          <div className="text-3xl font-bold text-slate-100">{loading ? '...' : totalCount}</div>
-          <p className="text-xs text-slate-500 font-mono">Synced from SQLite / Postgres</p>
-        </div>
-
-        <div className="p-5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-sm font-medium">Expired Records</span>
-            <Clock className="w-4 h-4 text-rose-400" />
-          </div>
-          <div className="text-3xl font-bold text-rose-400">{loading ? '...' : expiredCount}</div>
-          <p className="text-xs text-slate-500 font-mono">Action required (Anonymize / Delete)</p>
-        </div>
-
-        <div className="p-5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-sm font-medium">Expiring Soon</span>
-            <Clock className="w-4 h-4 text-amber-400" />
-          </div>
-          <div className="text-3xl font-bold text-amber-400">{loading ? '...' : expiringSoonCount}</div>
-          <p className="text-xs text-slate-500 font-mono">Within 30-day window</p>
-        </div>
-
-        <div className="p-5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-sm font-medium">Purpose Mismatches</span>
-            <AlertTriangle className="w-4 h-4 text-purple-400" />
-          </div>
-          <div className="text-3xl font-bold text-purple-400">{loading ? '...' : mismatchCount}</div>
-          <p className="text-xs text-slate-500 font-mono">Flagged by governance schema</p>
-        </div>
-      </div>
-
-      {/* Quick Navigation Cards for Team Members */}
-      <div className="p-6 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
-        <h2 className="text-lg font-semibold text-slate-200">Team Module Handoff & Quick Actions</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Link to="/inventory" className="p-4 rounded-lg bg-slate-900 border border-slate-800 hover:border-sky-500/50 transition-all group">
-            <div className="flex justify-between items-center mb-2">
-              <span className="font-semibold text-sky-400 group-hover:underline">Data Inventory</span>
-              <ArrowUpRight className="w-4 h-4 text-slate-500 group-hover:text-sky-400" />
-            </div>
-            <p className="text-xs text-slate-400">View and manage full synthetic records catalog.</p>
-            <span className="inline-block mt-3 text-[10px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">Assigned to Team 3</span>
-          </Link>
-
-          <Link to="/purpose-mismatch" className="p-4 rounded-lg bg-slate-900 border border-slate-800 hover:border-purple-500/50 transition-all group">
-            <div className="flex justify-between items-center mb-2">
-              <span className="font-semibold text-purple-400 group-hover:underline">AI & Mismatch Engine</span>
-              <ArrowUpRight className="w-4 h-4 text-slate-500 group-hover:text-purple-400" />
-            </div>
-            <p className="text-xs text-slate-400">Purpose divergence scoring and LLM recommendations.</p>
-            <span className="inline-block mt-3 text-[10px] px-2 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-800">Assigned to Team 2</span>
-          </Link>
-
-          <Link to="/policy" className="p-4 rounded-lg bg-slate-900 border border-slate-800 hover:border-amber-500/50 transition-all group">
-            <div className="flex justify-between items-center mb-2">
-              <span className="font-semibold text-amber-400 group-hover:underline">Policy & Audit Engine</span>
-              <ArrowUpRight className="w-4 h-4 text-slate-500 group-hover:text-amber-400" />
-            </div>
-            <p className="text-xs text-slate-400">Automated retention rules, deletion triggers & logs.</p>
-            <span className="inline-block mt-3 text-[10px] px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800">Assigned to Team 4</span>
-          </Link>
-        </div>
-      </div>
-    </div>
-  );
+  const [records,setRecords]=useState<DataRecord[]>([]); const [loading,setLoading]=useState(true); const [error,setError]=useState('');
+  useEffect(()=>{apiService.getDataRecords({limit:500}).then(setRecords).catch(e=>setError(e.message||'Unable to load dashboard data.')).finally(()=>setLoading(false));},[]);
+  const count=(pred:(r:DataRecord)=>boolean)=>records.filter(pred).length;
+  const metrics=[{label:'Total records',value:records.length,icon:Database,color:'text-sky-400'},{label:'Sensitive records',value:count(r=>r.sensitivity==='High'),icon:ShieldAlert,color:'text-rose-400'},{label:'Expiring soon',value:count(r=>r.status==='Expiring Soon'),icon:Clock3,color:'text-amber-400'},{label:'Expired records',value:count(r=>r.status==='Expired'),icon:Archive,color:'text-orange-400'},{label:'Purpose mismatches',value:count(r=>Boolean(r.purpose_mismatch)),icon:AlertTriangle,color:'text-violet-400'},{label:'Pending reviews',value:count(r=>r.review_status==='Pending'||r.ai_recommendation==='REVIEW'),icon:Eye,color:'text-cyan-400'},{label:'Recommended deletions',value:count(r=>r.ai_recommendation==='DELETE'),icon:Archive,color:'text-rose-400'},{label:'Recommended anonymizations',value:count(r=>r.ai_recommendation==='ANONYMIZE'),icon:Sparkles,color:'text-emerald-400'}];
+  const sensitivity=useMemo(()=>['High','Medium','Low'].map(v=>[v,count(r=>r.sensitivity===v)] as [string,number]),[records]);
+  const category=useMemo(()=>[...new Set(records.map(r=>r.category))].map(v=>[v,count(r=>r.category===v)] as [string,number]).sort((a,b)=>b[1]-a[1]).slice(0,6),[records]);
+  const lifecycle=useMemo(()=>['Active','Expiring Soon','Expired'].map(v=>[v,count(r=>r.status===v)] as [string,number]),[records]);
+  const recommendation=useMemo(()=>['KEEP','REVIEW','ANONYMIZE','DELETE'].map(v=>[v,count(r=>r.ai_recommendation===v)] as [string,number]),[records]);
+  const expiry=useMemo(()=>{const buckets:[string,number][]=[['Overdue',0],['0–30 days',0],['31–90 days',0],['90+ days',0]]; records.forEach(r=>{const days=(Date.parse(r.expiry_date)-Date.now())/86400000;if(days<0)buckets[0][1]++;else if(days<=30)buckets[1][1]++;else if(days<=90)buckets[2][1]++;else buckets[3][1]++;});return buckets;},[records]);
+  const mismatches=count(r=>Boolean(r.purpose_mismatch));
+  return <div className="space-y-6"><header><p className="mb-2 text-xs font-semibold uppercase tracking-[.18em] text-sky-400">Overview · Data governance</p><h1 className="text-3xl font-bold text-white">Governance dashboard</h1><p className="mt-1 text-sm text-slate-400">Lifecycle posture and recommendations from the connected data catalog.</p></header>
+    {error && <div role="alert" className="rounded-lg border border-rose-900 bg-rose-950/30 p-4 text-sm text-rose-300">{error} <button onClick={()=>{setLoading(true);apiService.getDataRecords({limit:500}).then(setRecords).catch(e=>setError(e.message)).finally(()=>setLoading(false));}} className="underline">Retry</button></div>}
+    {loading ? <div className="rounded-xl border border-slate-800 bg-slate-950 p-10 text-center text-slate-400">Loading governance metrics…</div> : <>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{metrics.map(({label,value,icon:Icon,color})=><div key={label} className="rounded-xl border border-slate-800 bg-slate-950 p-4"><div className="flex items-center justify-between"><span className="text-sm text-slate-400">{label}</span><Icon size={17} className={color}/></div><div className="mt-3 text-3xl font-semibold tracking-tight text-white">{value}</div></div>)}</div>
+      <div className="grid gap-4 lg:grid-cols-2"><Panel title="Records by sensitivity"><Bars values={sensitivity}/></Panel><Panel title="Records by category"><Bars values={category}/></Panel><Panel title="Lifecycle status"><Bars values={lifecycle}/></Panel><Panel title="Expiry timeline"><Bars values={expiry}/></Panel><Panel title="Purpose mismatch count" link="/purpose-mismatch"><div className="flex items-center gap-4"><div className="text-4xl font-semibold text-violet-300">{mismatches}</div><p className="max-w-xs text-sm text-slate-400">Records flagged by the API. Open the center to inspect original purpose and current usage.</p></div></Panel><Panel title="Recommended actions" link="/ai-insights"><Bars values={recommendation}/></Panel></div>
+      <section className="rounded-xl border border-slate-800 bg-slate-950 p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold text-white">Explore the catalog</h2><p className="mt-1 text-sm text-slate-400">Inspect records or prioritize retention follow-up.</p></div><div className="flex gap-2"><Link to="/inventory" className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-500">Open inventory <ArrowRight size={15}/></Link><Link to="/expiry" className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800">Expiry queue</Link></div></div></section>
+    </>}
+  </div>;
 };
