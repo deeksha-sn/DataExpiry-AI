@@ -1,8 +1,18 @@
-# Environment Variables & Secrets
+# ==============================================================================
+# DATAEXPIRY-AI — Git Ignore Configuration
+# ==============================================================================
+
+# Environment Variables & Secrets (NEVER commit secrets or credentials)
 .env
 .env.local
 .env.*.local
 *.env
+*.pem
+*.key
+*.cert
+*.crt
+id_rsa*
+id_ed25519*
 
 # Python & Virtual Environments
 __pycache__/
@@ -32,23 +42,39 @@ wheels/
 .pytest_cache/
 .coverage
 htmlcov/
+.mypy_cache/
+.ruff_cache/
 
-# Database Files
+# SQLite Database Files & Backups (Preserve local data; never track in git)
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
+*.bak
+*.backup
+dataexpiry.db
+backend/dataexpiry.db
 
-# Node & Frontend
+# Node.js & Frontend Build Outputs
 node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+dist-ssr/
+*.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 .pnpm-debug.log*
-dist-ssr/
-*.tsbuildinfo
 
-# OS & Editor
+# Jupyter Runtime Files & Notebook Checkpoints
+.ipynb_checkpoints/
+*.ipynb
+
+# OS & File System Artifacts
 .DS_Store
 .DS_Store?
 ._*
@@ -56,7 +82,19 @@ dist-ssr/
 .Trashes
 ehthumbs.db
 Thumbs.db
-.vscode/
+Desktop.ini
+
+# IDE & Editor Temporary State
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 .idea/
 *.swp
 *.swo
+*~
+*.sublime-workspace
+*.sublime-project
+
+# Logs and runtime artifacts
+logs/
+*.log

@@ -118,3 +118,104 @@ export interface AIGovernanceSummary {
   };
   category_breakdown: Record<string, number>;
 }
+
+export interface PolicyRule {
+  id: number;
+  rule_code: string;
+  name: string;
+  category: string;
+  retention_period: string;
+  retention_days: number;
+  action_on_expiry: 'KEEP' | 'REVIEW' | 'ANONYMIZE' | 'DELETE' | string;
+  description?: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PolicyRuleCreateInput {
+  rule_code: string;
+  name: string;
+  category: string;
+  retention_period: string;
+  retention_days?: number;
+  action_on_expiry: string;
+  description?: string | null;
+  is_active?: boolean;
+}
+
+export interface PolicyRuleUpdateInput {
+  name?: string;
+  category?: string;
+  retention_period?: string;
+  retention_days?: number;
+  action_on_expiry?: string;
+  description?: string | null;
+  is_active?: boolean;
+}
+
+export interface PolicyEvaluationItem {
+  record_id: string;
+  category: string;
+  expiry_date: string;
+  expiry_status: 'ACTIVE' | 'EXPIRING_SOON' | 'EXPIRED' | string;
+  days_until_expiry: number;
+  deterministic_recommendation: 'KEEP' | 'REVIEW' | 'ANONYMIZE' | 'DELETE' | string;
+  matched_policy_rule?: string | null;
+  ai_recommendation?: string | null;
+  purpose_mismatch: boolean;
+  evaluation_reason: string;
+}
+
+export interface PolicyEvaluationSummary {
+  total_evaluated: number;
+  active_count: number;
+  expiring_soon_count: number;
+  expired_count: number;
+  recommendations: Record<string, number>;
+  as_of_date: string;
+  expiring_soon_days: number;
+  records: PolicyEvaluationItem[];
+}
+
+export interface AuditLog {
+  audit_id: number;
+  record_id: string;
+  action: 'KEEP' | 'REVIEW' | 'ANONYMIZE' | 'DELETE' | string;
+  previous_status?: string | null;
+  new_status?: string | null;
+  user: string;
+  reason?: string | null;
+  ai_recommendation?: string | null;
+  policy_rule?: string | null;
+  timestamp: string;
+  created_at: string;
+}
+
+export interface AuditFilterParams {
+  record_id?: string;
+  action?: string;
+  user?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface LifecycleActionRequest {
+  action: 'KEEP' | 'REVIEW' | 'ANONYMIZE' | 'DELETE' | string;
+  reason?: string | null;
+}
+
+export interface LifecycleActionResponse {
+  record_id: string;
+  action_executed: string;
+  previous_status?: string | null;
+  new_status?: string | null;
+  audit_id: number;
+  message: string;
+  deletion_status?: string | null;
+  anonymization_status?: string | null;
+  review_status?: string | null;
+}
+
+
+

@@ -10,6 +10,11 @@ Includes optional LLM provider mode with automatic, reliable rule-based fallback
 import json
 import re
 import logging
+import time
+import random
+import hashlib
+import threading
+from contextlib import contextmanager
 from typing import Dict, Any, List, Optional, Set, Tuple
 import httpx
 from sqlalchemy.orm import Session
@@ -110,17 +115,169 @@ HIGH_RISK_CREEP_SIGNALS: Dict[str, Dict[str, Any]] = {
 VALID_RISK_LEVELS: Set[str] = {"Low", "Medium", "High", "Critical"}
 VALID_RECOMMENDATIONS: Set[str] = {"KEEP", "REVIEW", "ANONYMIZE", "DELETE"}
 DEFAULT_GEMINI_MODEL: str = "gemini-3.5-flash-lite"
+PROMPT_VERSION: str = "v1"
 GEMINI_API_ENDPOINT_TEMPLATE: str = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
+
+
+class GeminiRateLimiter:
+    """
+    Process-local sliding window rate limiter for Google Gemini API requests.
+    Enforces a conservative requests-per-minute (RPM) limit (default: 10 RPM)
+    to stay reliably within the free-tier quota (~15 RPM).
+
+    PROCESS-LOCAL SCOPE NOTICE:
+    This rate limiter coordinates requests within this single process/worker instance.
+    It does not coordinate across multiple separate worker processes or horizontal instances.
+    """
+    def __init__(self, rpm_limit: int = 10):
+        self.rpm_limit = max(1, rpm_limit)
+        self.window_seconds = 60.0
+        self.timestamps: List[float] = []
+        self.lock = threading.Lock()
+
+    def acquire(self, max_wait: float = 12.0) -> bool:
+        """
+        Attempts to acquire a request slot. Waits up to max_wait seconds if needed.
+        Returns True if acquired, False if acquiring would exceed max_wait.
+        """
+        while True:
+            with self.lock:
+                now = time.time()
+                cutoff = now - self.window_seconds
+                self.timestamps = [t for t in self.timestamps if t > cutoff]
+
+                if len(self.timestamps) < self.rpm_limit:
+                    self.timestamps.append(now)
+                    return True
+
+                wait_time = (self.timestamps[0] + self.window_seconds) - now
+                if wait_time <= 0:
+                    self.timestamps.pop(0)
+                    self.timestamps.append(now)
+                    return True
+
+                if wait_time > max_wait:
+                    logger.warning(
+                        f"Gemini rate limit slot unavailable (requires {wait_time:.1f}s wait > {max_wait:.1f}s max_wait). "
+                        "Falling back to rule-based engine."
+                    )
+                    return False
+
+            time.sleep(min(wait_time + 0.05, max_wait))
+
+    def reset(self):
+        with self.lock:
+            self.timestamps.clear()
+
+
+class GeminiResponseCache:
+    """
+    Bounded, thread-safe in-memory cache with TTL for Gemini governance assessments.
+    Keys are SHA-256 hashes of normalized governance metadata and prompt version.
+    Sensitive personal data, customer names, emails, and record_ids are NEVER stored in cache keys.
+    """
+    def __init__(self, ttl_seconds: int = 3600, max_entries: int = 1000):
+        self.ttl_seconds = ttl_seconds
+        self.max_entries = max_entries
+        self.cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self.lock = threading.Lock()
+
+    @staticmethod
+    def compute_key(
+        model: str,
+        category: str,
+        sensitivity: str,
+        collection_purpose: str,
+        current_usage: str,
+        status: str,
+        expiry_date: str,
+        prompt_version: str = PROMPT_VERSION,
+    ) -> str:
+        raw = "|".join([
+            (prompt_version or "").strip().lower(),
+            (model or "").strip().lower(),
+            (category or "").strip().lower(),
+            (sensitivity or "").strip().lower(),
+            (collection_purpose or "").strip().lower(),
+            (current_usage or "").strip().lower(),
+            (status or "").strip().lower(),
+            (expiry_date or "").strip().lower(),
+        ])
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def get(self, key: str) -> Optional[Dict[str, Any]]:
+        with self.lock:
+            entry = self.cache.get(key)
+            if not entry:
+                return None
+            timestamp, data = entry
+            if time.time() - timestamp > self.ttl_seconds:
+                del self.cache[key]
+                return None
+            return dict(data)
+
+    def set(self, key: str, value: Dict[str, Any]) -> None:
+        with self.lock:
+            if len(self.cache) >= self.max_entries and key not in self.cache:
+                oldest_key = min(self.cache.keys(), key=lambda k: self.cache[k][0])
+                del self.cache[oldest_key]
+            self.cache[key] = (time.time(), dict(value))
+
+    def clear(self):
+        with self.lock:
+            self.cache.clear()
+
+
+_rate_limiter = GeminiRateLimiter(rpm_limit=getattr(settings, "GEMINI_RPM_LIMIT", 10))
+_response_cache = GeminiResponseCache(
+    ttl_seconds=getattr(settings, "GEMINI_CACHE_TTL_SECONDS", 3600),
+    max_entries=getattr(settings, "GEMINI_CACHE_MAX_ENTRIES", 1000),
+)
+
+
+class _InflightEntry:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.ref_count = 0
+
+
+_inflight_entries: Dict[str, _InflightEntry] = {}
+_inflight_master_lock = threading.Lock()
+
+
+@contextmanager
+def inflight_deduplication(key: str):
+    """
+    Reference-counted single-flight synchronization gate.
+    Ensures identical concurrent requests share a lock to deduplicate work,
+    and safely purges the entry from memory once all waiting/running callers exit.
+    """
+    with _inflight_master_lock:
+        entry = _inflight_entries.get(key)
+        if entry is None:
+            entry = _InflightEntry()
+            _inflight_entries[key] = entry
+        entry.ref_count += 1
+
+    try:
+        with entry.lock:
+            yield
+    finally:
+        with _inflight_master_lock:
+            entry.ref_count -= 1
+            if entry.ref_count <= 0:
+                _inflight_entries.pop(key, None)
 
 
 class GeminiAIProvider:
     """
     Dedicated Google Gemini REST API provider for semantic purpose mismatch evaluation.
     Communicates via httpx using Google's Generative Language REST API.
-    Enforces strict privacy boundaries, timeout handling, and schema validation.
-    Returns None on any error to activate the deterministic rule-based fallback.
+    Enforces strict privacy boundaries, timeout handling, process-local rate limiting (10 RPM default),
+    request deduplication, in-memory caching, retry backoff with jitter, and schema validation.
+    Returns None on any error or quota exhaustion to activate the deterministic rule-based fallback.
     """
 
     @classmethod
@@ -143,6 +300,28 @@ class GeminiAIProvider:
     def is_available(cls) -> bool:
         """Checks if a Gemini API key is configured."""
         return bool(cls.get_api_key())
+
+    @classmethod
+    def get_rate_limiter(cls) -> GeminiRateLimiter:
+        return _rate_limiter
+
+    @classmethod
+    def get_cache(cls) -> GeminiResponseCache:
+        return _response_cache
+
+    @classmethod
+    def get_inflight_count(cls) -> int:
+        """Returns the number of active in-flight lock entries (for testing)."""
+        with _inflight_master_lock:
+            return len(_inflight_entries)
+
+    @classmethod
+    def reset_cache_and_limiter(cls):
+        """Resets cache, rate limiter, and in-flight entries state (used in automated test suites)."""
+        _response_cache.clear()
+        _rate_limiter.reset()
+        with _inflight_master_lock:
+            _inflight_entries.clear()
 
     @classmethod
     def build_prompt(
@@ -186,8 +365,7 @@ class GeminiAIProvider:
             "2. Risk Level: Set risk_level to 'Critical', 'High', 'Medium', or 'Low' considering data "
             "sensitivity, retention status (expired vs active), and degree of purpose divergence.\n"
             "3. Advisory Recommendation: Recommend 'KEEP', 'REVIEW', 'ANONYMIZE', or 'DELETE'.\n"
-            "   IMPORTANT: This recommendation is ADVISORY ONLY. It does not execute actions or make binding "
-            "governance decisions.\n"
+            "   IMPORTANT: If purpose_mismatch is true, recommend 'REVIEW'. All recommendations are ADVISORY ONLY.\n"
             "4. Explanation: Provide a concise (1-2 sentences) natural language compliance explanation "
             "stating the rationale and that this is an advisory finding.\n\n"
             "Return ONLY a valid JSON object matching this schema exactly:\n"
@@ -200,6 +378,100 @@ class GeminiAIProvider:
         )
 
     @classmethod
+    def build_batch_prompt(cls, items: List[Dict[str, Any]]) -> str:
+        """
+        Constructs a structured multi-record governance prompt to evaluate a batch
+        in a single request, significantly reducing token consumption and API call volume.
+        """
+        prompt_parts = [
+            "You are an enterprise data privacy and governance auditor specializing in GDPR, "
+            "CCPA, and purpose limitation compliance.\n\n"
+            "Evaluate whether active operational usage is compatible with stated collection purpose "
+            "for each non-PII record item below.\n\n"
+            "PRIVACY BOUNDARY: Only non-PII operational governance metadata is provided.\n\n"
+            "METADATA RECORDS FOR AUDIT:\n"
+        ]
+
+        for idx, item in enumerate(items):
+            prompt_parts.append(
+                f"Item {idx}:\n"
+                f"- Category: {item.get('category', 'General')}\n"
+                f"- Sensitivity: {item.get('sensitivity', 'Medium')}\n"
+                f"- Stated Collection Purpose: {item.get('collection_purpose', '')}\n"
+                f"- Active Current Usage: {item.get('current_usage', '')}\n"
+                f"- Retention Lifecycle Status: {item.get('status', 'Active')}\n"
+                f"- Mandated Expiry Date: {item.get('expiry_date', 'N/A')}\n\n"
+            )
+
+        prompt_parts.append(
+            "GOVERNANCE RULES:\n"
+            "1. purpose_mismatch: true if usage introduces unconsented secondary use; false if compatible.\n"
+            "2. risk_level: 'Critical', 'High', 'Medium', or 'Low'.\n"
+            "3. ai_recommendation: 'KEEP', 'REVIEW', 'ANONYMIZE', or 'DELETE'. If purpose_mismatch is true, must be 'REVIEW'.\n"
+            "4. explanation: concise 1-2 sentence advisory explanation.\n\n"
+            "Return ONLY a valid JSON array of objects with the item index matching this schema:\n"
+            "[\n"
+            "  {\n"
+            '    "index": 0,\n'
+            '    "purpose_mismatch": true,\n'
+            '    "risk_level": "High",\n'
+            '    "ai_recommendation": "REVIEW",\n'
+            '    "explanation": "concise explanation"\n'
+            "  }\n"
+            "]"
+        )
+        return "".join(prompt_parts)
+
+    @classmethod
+    def validate_assessment_dict(cls, parsed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Validates individual assessment dictionary against the strict governance schema.
+        Enforces governance invariants (e.g. purpose_mismatch=True mandates REVIEW).
+        """
+        if not isinstance(parsed, dict):
+            return None
+
+        required_keys = {"purpose_mismatch", "risk_level", "ai_recommendation", "explanation"}
+        if not required_keys.issubset(parsed.keys()):
+            return None
+
+        raw_mismatch = parsed.get("purpose_mismatch")
+        if isinstance(raw_mismatch, bool):
+            purpose_mismatch = raw_mismatch
+        elif isinstance(raw_mismatch, str):
+            if raw_mismatch.lower() == "true":
+                purpose_mismatch = True
+            elif raw_mismatch.lower() == "false":
+                purpose_mismatch = False
+            else:
+                return None
+        else:
+            return None
+
+        raw_risk = str(parsed.get("risk_level", "")).strip().title()
+        if raw_risk not in VALID_RISK_LEVELS:
+            return None
+
+        raw_rec = str(parsed.get("ai_recommendation", "")).strip().upper()
+        if raw_rec not in VALID_RECOMMENDATIONS:
+            return None
+
+        # Data governance safety invariant: Purpose mismatch MUST escalate to human review
+        if purpose_mismatch and raw_rec == "KEEP":
+            raw_rec = "REVIEW"
+
+        raw_exp = str(parsed.get("explanation", "")).strip()
+        if not raw_exp:
+            return None
+
+        return {
+            "purpose_mismatch": purpose_mismatch,
+            "risk_level": raw_risk,
+            "ai_recommendation": raw_rec,
+            "explanation": raw_exp,
+        }
+
+    @classmethod
     def parse_and_validate_response(cls, response_text: str) -> Optional[Dict[str, Any]]:
         """
         Parses raw LLM text into a validated dictionary.
@@ -209,7 +481,6 @@ class GeminiAIProvider:
             logger.warning("Invalid provider response: empty response text received.")
             return None
 
-        # Clean potential markdown fences (e.g. ```json ... ```)
         cleaned_text = response_text.strip()
         if cleaned_text.startswith("```"):
             lines = cleaned_text.splitlines()
@@ -225,57 +496,48 @@ class GeminiAIProvider:
             logger.warning(f"Invalid provider response: failed to parse JSON ({e}).")
             return None
 
-        if not isinstance(parsed, dict):
-            logger.warning("Invalid provider response: parsed JSON is not an object/dictionary.")
+        assessment = cls.validate_assessment_dict(parsed)
+        if not assessment:
+            logger.warning("Invalid provider response: schema or domain validation failed.")
             return None
 
-        # Check required fields
-        required_keys = {"purpose_mismatch", "risk_level", "ai_recommendation", "explanation"}
-        if not required_keys.issubset(parsed.keys()):
-            missing = required_keys - set(parsed.keys())
-            logger.warning(f"Invalid provider response: missing required fields {missing}.")
+        return assessment
+
+    @classmethod
+    def parse_and_validate_batch_response(cls, response_text: str, expected_count: int) -> Optional[Dict[int, Dict[str, Any]]]:
+        """
+        Parses raw batch LLM text into a dictionary mapping index to assessment.
+        """
+        if not response_text or not response_text.strip():
             return None
 
-        # Validate purpose_mismatch boolean
-        raw_mismatch = parsed.get("purpose_mismatch")
-        if isinstance(raw_mismatch, bool):
-            purpose_mismatch = raw_mismatch
-        elif isinstance(raw_mismatch, str):
-            if raw_mismatch.lower() == "true":
-                purpose_mismatch = True
-            elif raw_mismatch.lower() == "false":
-                purpose_mismatch = False
-            else:
-                logger.warning(f"Invalid provider response: non-boolean purpose_mismatch '{raw_mismatch}'.")
-                return None
-        else:
-            logger.warning(f"Invalid provider response: unexpected type for purpose_mismatch ({type(raw_mismatch)}).")
+        cleaned_text = response_text.strip()
+        if cleaned_text.startswith("```"):
+            lines = cleaned_text.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            cleaned_text = "\n".join(lines).strip()
+
+        try:
+            parsed = json.loads(cleaned_text)
+        except Exception:
             return None
 
-        # Validate risk_level (case-insensitive check against VALID_RISK_LEVELS)
-        raw_risk = str(parsed.get("risk_level", "")).strip().title()
-        if raw_risk not in VALID_RISK_LEVELS:
-            logger.warning(f"Invalid provider response: invalid risk_level '{raw_risk}'.")
+        if not isinstance(parsed, list):
             return None
 
-        # Validate ai_recommendation (case-insensitive check against VALID_RECOMMENDATIONS)
-        raw_rec = str(parsed.get("ai_recommendation", "")).strip().upper()
-        if raw_rec not in VALID_RECOMMENDATIONS:
-            logger.warning(f"Invalid provider response: invalid ai_recommendation '{raw_rec}'.")
-            return None
+        results_by_index: Dict[int, Dict[str, Any]] = {}
+        for elem in parsed:
+            if not isinstance(elem, dict) or "index" not in elem:
+                continue
+            idx = elem.get("index")
+            validated = cls.validate_assessment_dict(elem)
+            if validated and isinstance(idx, int) and 0 <= idx < expected_count:
+                results_by_index[idx] = validated
 
-        # Validate explanation
-        raw_exp = str(parsed.get("explanation", "")).strip()
-        if not raw_exp:
-            logger.warning("Invalid provider response: empty explanation.")
-            return None
-
-        return {
-            "purpose_mismatch": purpose_mismatch,
-            "risk_level": raw_risk,
-            "ai_recommendation": raw_rec,
-            "explanation": raw_exp,
-        }
+        return results_by_index if len(results_by_index) > 0 else None
 
     @classmethod
     def analyze(
@@ -288,12 +550,12 @@ class GeminiAIProvider:
         expiry_date: str,
     ) -> Optional[Dict[str, Any]]:
         """
-        Executes real Gemini REST API call using httpx.
-
-        =========================== PRIVACY BOUNDARY ===========================
-        Only non-PII operational governance metadata is accepted and passed.
-        No customer names, emails, IDs, credentials, or document contents are ever transmitted.
-        ========================================================================
+        Executes semantic analysis via Google Gemini REST API with:
+        - In-memory caching with SHA-256 keys (avoids duplicate calls for identical inputs)
+        - Single-flight deduplication across concurrent requests
+        - Process-local sliding window rate limiting (10 RPM default for ~15 RPM quota)
+        - Bounded exponential backoff with jitter on 429/503 errors and timeouts
+        - Fail-safe fallback to deterministic rule-based analysis
         """
         api_key = cls.get_api_key()
         if not api_key:
@@ -301,8 +563,8 @@ class GeminiAIProvider:
             return None
 
         model = cls.get_model()
-        url = GEMINI_API_ENDPOINT_TEMPLATE.format(model=model)
-        prompt = cls.build_prompt(
+        cache_key = _response_cache.compute_key(
+            model=model,
             category=category,
             sensitivity=sensitivity,
             collection_purpose=collection_purpose,
@@ -311,74 +573,241 @@ class GeminiAIProvider:
             expiry_date=expiry_date,
         )
 
+        # 1. Quick cache check
+        cached = _response_cache.get(cache_key)
+        if cached is not None:
+            logger.debug("Reusing cached Gemini governance assessment.")
+            return cached
+
+        # 2. Single-flight gate to prevent concurrent identical request bursts and clean up safely
+        with inflight_deduplication(cache_key):
+            # Re-check cache inside gate
+            cached = _response_cache.get(cache_key)
+            if cached is not None:
+                logger.debug("Reusing cached Gemini governance assessment (single-flight deduplication).")
+                return cached
+
+            url = GEMINI_API_ENDPOINT_TEMPLATE.format(model=model)
+            prompt = cls.build_prompt(
+                category=category,
+                sensitivity=sensitivity,
+                collection_purpose=collection_purpose,
+                current_usage=current_usage,
+                status=status,
+                expiry_date=expiry_date,
+            )
+
+            headers = {
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+            }
+
+            payload = {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": prompt}
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0.1,
+                    "responseMimeType": "application/json"
+                }
+            }
+
+            max_retries = getattr(settings, "GEMINI_MAX_RETRIES", 2)
+            timeout_sec = getattr(settings, "GEMINI_TIMEOUT_SECONDS", 8.0)
+
+            for attempt in range(max_retries + 1):
+                # Rate limiter check for EVERY attempt, including retries
+                if not _rate_limiter.acquire(max_wait=10.0):
+                    logger.warning(
+                        f"Gemini API rate limit reached on attempt {attempt + 1}/{max_retries + 1} "
+                        "(process-local limiter). Falling back to rule-based engine."
+                    )
+                    return None
+
+                try:
+                    logger.info(
+                        f"Initiating Gemini AI request (model: {model}, attempt {attempt + 1}/{max_retries + 1})..."
+                    )
+                    with httpx.Client(timeout=httpx.Timeout(timeout_sec, connect=3.0)) as client:
+                        response = client.post(url, headers=headers, json=payload)
+
+                    if response.status_code == 200:
+                        data = response.json()
+                        candidates = data.get("candidates", [])
+                        if not candidates:
+                            logger.warning("Gemini API response contained no candidates. Falling back to rule-based engine.")
+                            return None
+
+                        candidate = candidates[0]
+                        content = candidate.get("content", {})
+                        parts = content.get("parts", [])
+                        if not parts:
+                            logger.warning("Gemini API candidate contained no parts. Falling back to rule-based engine.")
+                            return None
+
+                        generated_text = parts[0].get("text", "")
+                        assessment = cls.parse_and_validate_response(generated_text)
+                        if not assessment:
+                            logger.warning("Gemini API response failed validation. Falling back to rule-based engine.")
+                            return None
+
+                        # Cache valid assessment
+                        _response_cache.set(cache_key, assessment)
+                        logger.info("Successfully received and validated Gemini AI governance assessment.")
+                        return assessment
+
+                    # Handle 429 Rate Limit and 503 Unavailable with bounded backoff
+                    if response.status_code in (429, 503) and attempt < max_retries:
+                        retry_after = response.headers.get("Retry-After")
+                        delay = None
+                        if retry_after:
+                            try:
+                                delay = min(10.0, float(retry_after))
+                            except ValueError:
+                                pass
+                        if delay is None:
+                            delay = min(8.0, (1.5 ** attempt) * 2.0 + random.uniform(0.1, 0.5))
+
+                        logger.warning(
+                            f"Gemini API returned HTTP {response.status_code} (attempt {attempt + 1}/{max_retries + 1}). "
+                            f"Retrying in {delay:.2f}s..."
+                        )
+                        time.sleep(delay)
+                        continue
+
+                    # Non-retryable error (e.g. 400, 401, 403, 404) or retries exhausted
+                    safe_body = (response.text or "").strip()
+                    if api_key and api_key in safe_body:
+                        safe_body = safe_body.replace(api_key, "[REDACTED]")
+                    if len(safe_body) > 250:
+                        safe_body = safe_body[:250] + "... (truncated)"
+                    safe_body = safe_body.replace("\n", " ") if safe_body else "<empty response>"
+                    logger.warning(
+                        f"Gemini API request failed with HTTP status {response.status_code}: {safe_body}. "
+                        "Falling back to rule-based engine."
+                    )
+                    return None
+
+                except httpx.TimeoutException:
+                    if attempt < max_retries:
+                        delay = 1.0 + random.uniform(0.1, 0.5)
+                        logger.warning(f"Gemini API request timed out. Retrying in {delay:.2f}s...")
+                        time.sleep(delay)
+                        continue
+                    logger.warning("Gemini API request timed out after retries. Falling back to rule-based engine.")
+                    return None
+                except httpx.HTTPError as e:
+                    logger.warning(f"Gemini API HTTP communication error: {e}. Falling back to rule-based engine.")
+                    return None
+                except Exception as e:
+                    logger.warning(f"Unexpected error querying Gemini API: {e}. Falling back to rule-based engine.")
+                    return None
+
+            return None
+
+    @classmethod
+    def batch_analyze(
+        cls,
+        items: List[Dict[str, Any]]
+    ) -> Optional[Dict[int, Dict[str, Any]]]:
+        """
+        Executes a single structured batch evaluation request for multiple records.
+        Reduces token consumption and API calls. Returns mapping of item index to assessment.
+        """
+        if not cls.is_available() or not items:
+            return None
+
+        api_key = cls.get_api_key()
+        model = cls.get_model()
+        url = GEMINI_API_ENDPOINT_TEMPLATE.format(model=model)
+        prompt = cls.build_batch_prompt(items)
+
         headers = {
             "Content-Type": "application/json",
             "x-goog-api-key": api_key,
         }
-
         payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": prompt}
-                    ]
-                }
-            ],
+            "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.1,
-                "responseMimeType": "application/json"
-            }
+                "responseMimeType": "application/json",
+            },
         }
 
-        try:
-            logger.info(f"Initiating Gemini AI request (model: {model}) for semantic governance audit...")
-            with httpx.Client(timeout=httpx.Timeout(6.0, connect=3.0)) as client:
-                response = client.post(url, headers=headers, json=payload)
+        max_retries = getattr(settings, "GEMINI_MAX_RETRIES", 2)
+        timeout_sec = getattr(settings, "GEMINI_TIMEOUT_SECONDS", 8.0) * 1.5
 
-            if response.status_code != 200:
-                safe_body = (response.text or "").strip()
-                if api_key and api_key in safe_body:
-                    safe_body = safe_body.replace(api_key, "[REDACTED]")
-                if len(safe_body) > 250:
-                    safe_body = safe_body[:250] + "... (truncated)"
-                safe_body = safe_body.replace("\n", " ") if safe_body else "<empty response>"
+        for attempt in range(max_retries + 1):
+            # Rate limiter check for EVERY attempt, including retries
+            if not _rate_limiter.acquire(max_wait=10.0):
                 logger.warning(
-                    f"Gemini API request failed with HTTP status {response.status_code}: {safe_body}. "
+                    f"Gemini rate limit threshold reached on attempt {attempt + 1}/{max_retries + 1} for batch request. "
                     "Falling back to rule-based engine."
                 )
                 return None
 
-            data = response.json()
-            candidates = data.get("candidates", [])
-            if not candidates:
-                logger.warning("Gemini API response contained no candidates. Falling back to rule-based engine.")
+            try:
+                with httpx.Client(timeout=httpx.Timeout(timeout_sec, connect=3.0)) as client:
+                    response = client.post(url, headers=headers, json=payload)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    candidates = data.get("candidates", [])
+                    if not candidates:
+                        return None
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if not parts:
+                        return None
+                    generated_text = parts[0].get("text", "")
+                    parsed_batch = cls.parse_and_validate_batch_response(generated_text, len(items))
+                    if not parsed_batch:
+                        return None
+
+                    # Cache each successfully assessed record
+                    for idx, assessment in parsed_batch.items():
+                        if idx < len(items):
+                            it = items[idx]
+                            ck = _response_cache.compute_key(
+                                model=model,
+                                category=it.get("category", ""),
+                                sensitivity=it.get("sensitivity", ""),
+                                collection_purpose=it.get("collection_purpose", ""),
+                                current_usage=it.get("current_usage", ""),
+                                status=it.get("status", ""),
+                                expiry_date=it.get("expiry_date", ""),
+                            )
+                            _response_cache.set(ck, assessment)
+
+                    return parsed_batch
+
+                if response.status_code in (429, 503) and attempt < max_retries:
+                    retry_after = response.headers.get("Retry-After")
+                    delay = None
+                    if retry_after:
+                        try:
+                            delay = min(10.0, float(retry_after))
+                        except ValueError:
+                            pass
+                    if delay is None:
+                        delay = min(8.0, (1.5 ** attempt) * 2.0 + random.uniform(0.1, 0.5))
+                    time.sleep(delay)
+                    continue
+
                 return None
 
-            candidate = candidates[0]
-            content = candidate.get("content", {})
-            parts = content.get("parts", [])
-            if not parts:
-                logger.warning("Gemini API candidate contained no parts. Falling back to rule-based engine.")
+            except (httpx.TimeoutException, httpx.HTTPError):
+                if attempt < max_retries:
+                    time.sleep(1.5 + random.uniform(0.1, 0.5))
+                    continue
+                return None
+            except Exception:
                 return None
 
-            generated_text = parts[0].get("text", "")
-            assessment = cls.parse_and_validate_response(generated_text)
-            if not assessment:
-                logger.warning("Gemini API response failed validation. Falling back to rule-based engine.")
-                return None
-
-            logger.info("Successfully received and validated Gemini AI governance assessment.")
-            return assessment
-
-        except httpx.TimeoutException:
-            logger.warning("Gemini API request timed out. Falling back to rule-based engine.")
-            return None
-        except httpx.HTTPError as e:
-            logger.warning(f"Gemini API HTTP communication error: {e}. Falling back to rule-based engine.")
-            return None
-        except Exception as e:
-            logger.warning(f"Unexpected error querying Gemini API: {e}. Falling back to rule-based engine.")
-            return None
+        return None
 
 
 class AIService:
@@ -688,27 +1117,39 @@ class AIService:
         status = record_dict.get("status", "Active")
         expiry_date = record_dict.get("expiry_date", "N/A")
 
-        # 1. Try AI provider if configured
-        ai_result = cls._try_ai_provider(
-            record_id=record_id,
-            category=category,
-            sensitivity=sensitivity,
-            collection_purpose=collection_purpose,
-            current_usage=current_usage,
-            status=status,
-            expiry_date=expiry_date
-        )
+        # 1. Try AI provider if configured and record is not eligible for deterministic shortcut
+        ai_result = None
+        skip_identical = getattr(settings, "GEMINI_SKIP_IDENTICAL_PURPOSE", True)
+        norm_purpose = cls.normalize_text(collection_purpose)
+        norm_usage = cls.normalize_text(current_usage)
+        is_identical_purpose = bool(norm_purpose and norm_usage and norm_purpose == norm_usage)
+
+        if not (skip_identical and is_identical_purpose):
+            ai_result = cls._try_ai_provider(
+                record_id=record_id,
+                category=category,
+                sensitivity=sensitivity,
+                collection_purpose=collection_purpose,
+                current_usage=current_usage,
+                status=status,
+                expiry_date=expiry_date
+            )
 
         if ai_result:
+            mismatch = bool(ai_result.get("purpose_mismatch", False))
+            rec = ai_result.get("ai_recommendation", "REVIEW")
+            # Governance safety invariant: AI recommendation cannot be KEEP if purpose mismatch is flagged
+            if mismatch and rec == "KEEP":
+                rec = "REVIEW"
             return {
                 "record_id": record_id,
                 "category": category,
                 "sensitivity": sensitivity,
                 "collection_purpose": collection_purpose,
                 "current_usage": current_usage,
-                "purpose_mismatch": bool(ai_result.get("purpose_mismatch", False)),
+                "purpose_mismatch": mismatch,
                 "risk_level": ai_result.get("risk_level", "Medium"),
-                "ai_recommendation": ai_result.get("ai_recommendation", "REVIEW"),
+                "ai_recommendation": rec,
                 "explanation": ai_result.get("explanation", ""),
                 "analysis_mode": "ai_assisted"
             }
@@ -762,6 +1203,10 @@ class AIService:
     def batch_analyze_database(cls, db: Session, persist_results: bool = True) -> Dict[str, Any]:
         """
         Runs purpose mismatch detection across all records in the database.
+        Optimized for Gemini free tier (~15 RPM limit):
+        - Leverages process-local cache to avoid redundant API calls
+        - Batches un-cached records in structured chunks of 5 into single requests
+        - Seamlessly falls back to deterministic rule-based analysis on rate limit or error
         Optionally persists purpose_mismatch, risk_level, ai_recommendation,
         and ai_explanation directly to the database.
         """
@@ -779,8 +1224,10 @@ class AIService:
         medium_risk_count = 0
         low_risk_count = 0
 
+        # Pre-convert records to governance dicts
+        rec_dicts: List[Dict[str, Any]] = []
         for rec in records:
-            rec_dict = {
+            rec_dicts.append({
                 "record_id": rec.record_id,
                 "category": rec.category,
                 "sensitivity": rec.sensitivity,
@@ -788,9 +1235,41 @@ class AIService:
                 "current_usage": rec.current_usage,
                 "status": rec.status,
                 "expiry_date": rec.expiry_date,
-            }
+            })
 
-            analysis = cls.analyze_record(rec_dict)
+        # If Gemini AI provider is available, batch evaluate items not yet cached
+        if GeminiAIProvider.is_available() and rec_dicts:
+            items_to_batch: List[Dict[str, Any]] = []
+            skip_identical = getattr(settings, "GEMINI_SKIP_IDENTICAL_PURPOSE", True)
+            for r_dict in rec_dicts:
+                # If identical purpose shortcut is enabled, eligible records bypass external batch call
+                if skip_identical:
+                    np = cls.normalize_text(r_dict.get("collection_purpose", ""))
+                    nu = cls.normalize_text(r_dict.get("current_usage", ""))
+                    if np and nu and np == nu:
+                        continue
+
+                ck = _response_cache.compute_key(
+                    model=GeminiAIProvider.get_model(),
+                    category=r_dict["category"],
+                    sensitivity=r_dict["sensitivity"],
+                    collection_purpose=r_dict["collection_purpose"],
+                    current_usage=r_dict["current_usage"],
+                    status=r_dict["status"],
+                    expiry_date=r_dict["expiry_date"],
+                )
+                if not _response_cache.get(ck):
+                    items_to_batch.append(r_dict)
+
+            # Send in chunks of 5 to respect token and payload constraints
+            batch_size = 5
+            for start_idx in range(0, len(items_to_batch), batch_size):
+                chunk = items_to_batch[start_idx : start_idx + batch_size]
+                GeminiAIProvider.batch_analyze(chunk)
+
+        # Evaluate each record (retrieves cached assessment or uses rule-based engine)
+        for i, rec in enumerate(records):
+            analysis = cls.analyze_record(rec_dicts[i])
             results.append(analysis)
 
             # Update database record if requested

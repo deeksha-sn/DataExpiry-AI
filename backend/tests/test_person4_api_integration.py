@@ -30,8 +30,10 @@ app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
 
 @pytest.fixture(autouse=True)
-def setup_db():
+def setup_db(monkeypatch):
     """Ensure clean tables and active database override for each test."""
+    monkeypatch.setattr("app.core.config.settings.ENVIRONMENT", "development")
+    monkeypatch.setattr("app.core.config.settings.ALLOW_DEV_HEADER_AUTH", True)
     app.dependency_overrides[get_db] = override_get_db
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)

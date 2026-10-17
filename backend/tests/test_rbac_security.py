@@ -59,16 +59,77 @@ def test_record(db_session):
 def test_fallback_dev_user_when_headers_absent():
     user = get_current_user(x_user_id=None, x_user_role=None)
     assert user.user_id == "local_dev_user"
-    assert user.role == UserRole.ADMIN
+    assert user.role == UserRole.VIEWER
 
-def test_custom_user_and_role_headers():
+def test_unauthenticated_request_fails_closed():
+    user = get_current_user(x_user_id=None, x_user_role=None)
+    guard = require_role([UserRole.ADMIN, UserRole.DATA_GOVERNANCE])
+    with pytest.raises(HTTPException) as exc:
+        guard(user)
+    assert exc.value.status_code == 403
+
+def test_custom_user_and_role_headers(monkeypatch):
+    monkeypatch.setattr("app.core.config.settings.ENVIRONMENT", "development")
+    monkeypatch.setattr("app.core.config.settings.ALLOW_DEV_HEADER_AUTH", True)
     user = get_current_user(x_user_id="officer_42", x_user_role="PRIVACY_OFFICER")
     assert user.user_id == "officer_42"
     assert user.role == UserRole.PRIVACY_OFFICER
 
-def test_invalid_role_header_rejected():
+def test_invalid_role_header_rejected(monkeypatch):
+    monkeypatch.setattr("app.core.config.settings.ENVIRONMENT", "development")
+    monkeypatch.setattr("app.core.config.settings.ALLOW_DEV_HEADER_AUTH", True)
     with pytest.raises(HTTPException) as exc:
         get_current_user(x_user_id="user1", x_user_role="SUPER_HACKER")
+    assert exc.value.status_code == 403
+
+def test_dev_opt_in_permits_headers(monkeypatch):
+    """1. Development + explicit opt-in permits development headers."""
+    monkeypatch.setattr("app.core.config.settings.ENVIRONMENT", "development")
+    monkeypatch.setattr("app.core.config.settings.ALLOW_DEV_HEADER_AUTH", True)
+    user = get_current_user(x_user_id="dev_admin", x_user_role="ADMIN")
+    assert user.user_id == "dev_admin"
+    assert user.role == UserRole.ADMIN
+
+def test_dev_without_opt_in_rejects_headers(monkeypatch):
+    """2. Development without opt-in rejects caller-supplied privileged identity with 403."""
+    monkeypatch.setattr("app.core.config.settings.ENVIRONMENT", "development")
+    monkeypatch.setattr("app.core.config.settings.ALLOW_DEV_HEADER_AUTH", False)
+    with pytest.raises(HTTPException) as exc:
+        get_current_user(x_user_id="attacker", x_user_role="ADMIN")
+    assert exc.value.status_code == 403
+    assert "disabled" in exc.value.detail.lower()
+
+def test_production_with_opt_in_rejects_headers(monkeypatch):
+    """3. Production + opt-in still rejects caller-supplied privileged identity with 403."""
+    monkeypatch.setattr("app.core.config.settings.ENVIRONMENT", "production")
+    monkeypatch.setattr("app.core.config.settings.ALLOW_DEV_HEADER_AUTH", True)
+    with pytest.raises(HTTPException) as exc:
+        get_current_user(x_user_id="attacker", x_user_role="ADMIN")
+    assert exc.value.status_code == 403
+    assert "disabled" in exc.value.detail.lower()
+
+def test_missing_environment_rejects_headers(monkeypatch):
+    """4. Missing or unknown environment does not enable header authentication."""
+    monkeypatch.setattr("app.core.config.settings.ENVIRONMENT", "")
+    monkeypatch.setattr("app.core.config.settings.ALLOW_DEV_HEADER_AUTH", True)
+    with pytest.raises(HTTPException) as exc:
+        get_current_user(x_user_id="attacker", x_user_role="ADMIN")
+    assert exc.value.status_code == 403
+
+def test_missing_identity_never_grants_admin(monkeypatch):
+    """5. Missing identity never grants ADMIN, even when dev header auth is enabled."""
+    monkeypatch.setattr("app.core.config.settings.ENVIRONMENT", "development")
+    monkeypatch.setattr("app.core.config.settings.ALLOW_DEV_HEADER_AUTH", True)
+    user = get_current_user(x_user_id=None, x_user_role=None)
+    assert user.role == UserRole.VIEWER
+    assert user.role != UserRole.ADMIN
+
+def test_privileged_endpoints_reject_unauthenticated_requests():
+    """6. Privileged endpoints reject unauthenticated requests (fail closed)."""
+    unauth_user = get_current_user(x_user_id=None, x_user_role=None)
+    admin_guard = require_role([UserRole.ADMIN])
+    with pytest.raises(HTTPException) as exc:
+        admin_guard(unauth_user)
     assert exc.value.status_code == 403
 
 def test_require_role_dependency_factory():
