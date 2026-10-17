@@ -23,7 +23,7 @@ import {
 
 export const PurposeMismatch: React.FC = () => {
   const [records, setRecords] = useState<DataRecord[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [hasScanned, setHasScanned] = useState<boolean>(false);
   const [analyzingBatch, setAnalyzingBatch] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,35 +46,21 @@ export const PurposeMismatch: React.FC = () => {
   const [playgroundResult, setPlaygroundResult] = useState<PurposeMismatchResult | null>(null);
   const [playgroundLoading, setPlaygroundLoading] = useState<boolean>(false);
 
-  // Fetch initial records
-  const loadRecords = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await apiService.getDataRecords({ limit: 200 });
-      setRecords(data);
-    } catch (err: any) {
-      console.error('Failed to load records:', err);
-      setError(err.message || 'Failed to connect to backend API');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadRecords();
-  }, []);
-
-  // Run Batch AI Analysis
+  // Run Batch AI Analysis explicitly triggered by user
   const handleRunBatchAudit = async () => {
+    if (analyzingBatch) return; // Prevent duplicate clicks
     setAnalyzingBatch(true);
     setError(null);
+    setRecords([]); // Reset displayed results when user explicitly starts a fresh scan
     try {
       await apiService.runBatchAiAnalysis();
-      await loadRecords();
+      const data = await apiService.getDataRecords({ limit: 200 });
+      setRecords(data);
+      setHasScanned(true);
     } catch (err: any) {
       console.error('Batch analysis failed:', err);
-      setError(err.message || 'Batch analysis failed');
+      setError(err.message || 'Batch analysis scan failed. Please try again.');
+      setHasScanned(false);
     } finally {
       setAnalyzingBatch(false);
     }
@@ -217,11 +203,11 @@ export const PurposeMismatch: React.FC = () => {
 
           <button
             onClick={handleRunBatchAudit}
-            disabled={analyzingBatch || loading}
+            disabled={analyzingBatch}
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-sm font-medium transition-all shadow-lg shadow-purple-900/30"
           >
             <RefreshCw className={`w-4 h-4 ${analyzingBatch ? 'animate-spin' : ''}`} />
-            <span>{analyzingBatch ? 'Running Global Audit...' : 'Scan All Records'}</span>
+            <span>{analyzingBatch ? 'Scanning All Records...' : 'Scan All Records'}</span>
           </button>
         </div>
       </div>
@@ -233,8 +219,12 @@ export const PurposeMismatch: React.FC = () => {
             <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0" />
             <span className="text-sm font-mono">{error}</span>
           </div>
-          <button onClick={loadRecords} className="text-xs underline hover:text-rose-200">
-            Retry
+          <button
+            onClick={handleRunBatchAudit}
+            disabled={analyzingBatch}
+            className="text-xs underline hover:text-rose-200 disabled:opacity-50"
+          >
+            Retry Scan
           </button>
         </div>
       )}
@@ -248,8 +238,10 @@ export const PurposeMismatch: React.FC = () => {
             <span className="text-xs font-mono uppercase tracking-wider">Total Records Analyzed</span>
             <Layers className="w-4 h-4 text-sky-400" />
           </div>
-          <div className="text-3xl font-bold text-slate-100">{loading ? '...' : totalAnalyzed}</div>
-          <p className="text-xs text-slate-500">Continuous enterprise data catalog monitoring</p>
+          <div className="text-3xl font-bold text-slate-100">{hasScanned ? totalAnalyzed : '-'}</div>
+          <p className="text-xs text-slate-500 font-mono">
+            {hasScanned ? 'Continuous enterprise data catalog monitoring' : 'Scan required to display metrics'}
+          </p>
         </div>
 
         {/* Flagged Mismatches */}
@@ -259,8 +251,10 @@ export const PurposeMismatch: React.FC = () => {
             <span className="text-xs font-mono uppercase tracking-wider">Potential Mismatches</span>
             <AlertTriangle className="w-4 h-4 text-purple-400" />
           </div>
-          <div className="text-3xl font-bold text-purple-400">{loading ? '...' : mismatchCount}</div>
-          <p className="text-xs text-slate-500">Active utilization diverges from stated consent</p>
+          <div className="text-3xl font-bold text-purple-400">{hasScanned ? mismatchCount : '-'}</div>
+          <p className="text-xs text-slate-500 font-mono">
+            {hasScanned ? 'Active utilization diverges from stated consent' : 'Scan required to evaluate purpose creep'}
+          </p>
         </div>
 
         {/* Critical Risk Violations */}
@@ -270,8 +264,10 @@ export const PurposeMismatch: React.FC = () => {
             <span className="text-xs font-mono uppercase tracking-wider">Critical Violations</span>
             <ShieldAlert className="w-4 h-4 text-rose-400" />
           </div>
-          <div className="text-3xl font-bold text-rose-400">{loading ? '...' : criticalCount}</div>
-          <p className="text-xs text-slate-500">Expired records or high-risk secondary monetization</p>
+          <div className="text-3xl font-bold text-rose-400">{hasScanned ? criticalCount : '-'}</div>
+          <p className="text-xs text-slate-500 font-mono">
+            {hasScanned ? 'Expired records or high-risk secondary monetization' : 'Scan required to flag critical risks'}
+          </p>
         </div>
 
         {/* Requiring Review */}
@@ -281,8 +277,10 @@ export const PurposeMismatch: React.FC = () => {
             <span className="text-xs font-mono uppercase tracking-wider">Records In Review</span>
             <HelpCircle className="w-4 h-4 text-amber-400" />
           </div>
-          <div className="text-3xl font-bold text-amber-400">{loading ? '...' : reviewCount}</div>
-          <p className="text-xs text-slate-500">Pending compliance assessment or consent renewal</p>
+          <div className="text-3xl font-bold text-amber-400">{hasScanned ? reviewCount : '-'}</div>
+          <p className="text-xs text-slate-500 font-mono">
+            {hasScanned ? 'Pending compliance assessment or consent renewal' : 'Scan required for review queue'}
+          </p>
         </div>
       </div>
 
@@ -519,10 +517,30 @@ export const PurposeMismatch: React.FC = () => {
 
       {/* Main Records Table */}
       <div className="rounded-xl bg-slate-950 border border-slate-800 overflow-hidden shadow-sm">
-        {loading ? (
+        {analyzingBatch ? (
           <div className="p-16 text-center text-slate-400 font-mono space-y-3">
             <div className="w-8 h-8 border-2 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto" />
-            <p>Loading enterprise records from backend...</p>
+            <p>Scanning catalog and analyzing purpose alignment across records...</p>
+          </div>
+        ) : !hasScanned ? (
+          <div className="p-16 text-center text-slate-400 font-mono space-y-4">
+            <div className="w-12 h-12 rounded-xl bg-purple-950/60 border border-purple-800 text-purple-400 flex items-center justify-center mx-auto">
+              <Bot className="w-6 h-6" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-base font-semibold text-slate-200">No Purpose Mismatch Scan Run Yet</h3>
+              <p className="text-xs text-slate-400 max-w-md mx-auto">
+                Press &quot;Scan All Records&quot; above or click below to evaluate active operational usage against stated collection consent across all catalog records.
+              </p>
+            </div>
+            <button
+              onClick={handleRunBatchAudit}
+              disabled={analyzingBatch}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium transition-all shadow-lg shadow-purple-900/30"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>Scan All Records</span>
+            </button>
           </div>
         ) : filteredRecords.length === 0 ? (
           <div className="p-16 text-center text-slate-500 font-mono space-y-2">

@@ -145,12 +145,13 @@ DATAEXPIRY-AI/
 │   │   ├── schemas/               # Pydantic v2 Validation Schemas
 │   │   ├── services/              # Business Logic Services (data, policy, lifecycle, audit, ai)
 │   │   └── main.py                # FastAPI Application Factory & CORS Setup
-│   ├── tests/                     # Automated Test Suite (122 Regression Tests)
+│   ├── tests/                     # Automated Test Suite (127 Passing Tests)
 │   │   ├── test_action_authorization.py # Exhaustive 20-combination RBAC verification
 │   │   ├── test_ai_service.py     # AI NLP, rate limiting, and caching tests
 │   │   ├── test_policy_engine.py  # Retention policy duration & evaluation tests
 │   │   ├── test_rbac_security.py  # Security & fail-closed authorization tests
 │   │   └── ...                    # API, DB, and lifecycle tests
+│   ├── dataexpiry.db              # Pre-seeded SQLite demonstration database (20 records, 3 policies)
 │   ├── requirements.txt           # Python Dependency Manifest
 │   └── seed_db.py                 # Database Initialization & Synthetic Seed Script
 │
@@ -269,13 +270,17 @@ Configuration is managed via `.env` (or environment variables). Key parameters:
 | `GEMINI_API_KEY` | *(Empty)* | Optional Google Gemini API key (runs offline if unset) |
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Gemini model identifier |
 | `GEMINI_RPM_LIMIT` | `10` | Free-tier rate limit throttle |
+| `GEMINI_SKIP_IDENTICAL_PURPOSE` | `false` | Evaluates records with identical purpose via Gemini |
 | `CORS_ORIGINS` | `["http://localhost:5173"]` | Allowed CORS origins list |
+
+> [!NOTE]
+> The repository includes the verified demonstration database pre-seeded at `backend/dataexpiry.db` (20 records across 5 categories, 3 retention policies, 0 audit logs). When the backend is launched from `backend/`, it uses this database immediately with zero manual seeding required. To re-seed or reload synthetic data idempotently, execute `python backend/seed_db.py`.
 
 ---
 
 ## 🧪 Testing & Quality Assurance
 
-Run the complete automated regression suite (122 tests):
+Run the complete automated regression suite (127 tests):
 ```bash
 # Run all tests from the repository root
 pytest

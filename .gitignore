@@ -13,6 +13,9 @@
 *.crt
 id_rsa*
 id_ed25519*
+!.env.example
+!backend/.env.example
+!*.env.example
 
 # Python & Virtual Environments
 __pycache__/
@@ -45,7 +48,7 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# SQLite Database Files & Backups (Preserve local data; never track in git)
+# SQLite Database Files & Backups (Preserve local temporary data; track verified demo database)
 *.db
 *.db-journal
 *.db-wal
@@ -55,7 +58,8 @@ htmlcov/
 *.bak
 *.backup
 dataexpiry.db
-backend/dataexpiry.db
+backend/dataexpiry-*.db
+!backend/dataexpiry.db
 
 # Node.js & Frontend Build Outputs
 node_modules/

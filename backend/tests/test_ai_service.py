@@ -1337,3 +1337,175 @@ def test_disabling_skip_identical_purpose_queries_gemini_for_identical_text(monk
         assert mock_post.called
         assert res["analysis_mode"] == "ai_assisted"
         assert res["explanation"] == "Gemini confirmed compliant."
+
+
+def test_gemini_matching_purpose_queries_gemini_and_returns_ai_assisted(monkeypatch):
+    """
+    Verify matching-purpose records (e.g. CUS-1001) attempt Gemini when
+    GEMINI_SKIP_IDENTICAL_PURPOSE=False and return analysis_mode='ai_assisted'.
+    """
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "test-key-matching-assisted")
+    monkeypatch.setattr("app.core.config.settings.GEMINI_SKIP_IDENTICAL_PURPOSE", False)
+
+    mock_resp = make_mock_gemini_response({
+        "purpose_mismatch": False,
+        "risk_level": "Low",
+        "ai_recommendation": "KEEP",
+        "explanation": "Gemini verified matching purpose is compliant."
+    })
+
+    with patch("httpx.Client.post", return_value=mock_resp) as mock_post:
+        res = AIService.analyze_record({
+            "record_id": "CUS-1001",
+            "category": "Customer",
+            "sensitivity": "High",
+            "collection_purpose": "Order Processing & Delivery",
+            "current_usage": "Order Processing & Delivery",
+            "status": "Active",
+            "expiry_date": "2027-01-01"
+        })
+
+        assert mock_post.called
+        assert res["analysis_mode"] == "ai_assisted"
+        assert res["purpose_mismatch"] is False
+        assert res["ai_recommendation"] == "KEEP"
+        assert res["explanation"] == "Gemini verified matching purpose is compliant."
+
+
+def test_gemini_matching_purpose_falls_back_to_rule_based_on_api_error(monkeypatch):
+    """
+    Verify matching-purpose records fall back safely to rule-based engine and report
+    analysis_mode='rule_based' when Gemini returns an HTTP error or times out.
+    """
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "test-key-matching-fallback")
+    monkeypatch.setattr("app.core.config.settings.GEMINI_SKIP_IDENTICAL_PURPOSE", False)
+
+    mock_resp = make_mock_gemini_response({}, status_code=500)
+
+    with patch("httpx.Client.post", return_value=mock_resp) as mock_post:
+        res = AIService.analyze_record({
+            "record_id": "CUS-1001",
+            "category": "Customer",
+            "sensitivity": "High",
+            "collection_purpose": "Order Processing & Delivery",
+            "current_usage": "Order Processing & Delivery",
+            "status": "Expired",
+            "expiry_date": "2025-01-15"
+        })
+
+        assert mock_post.called
+        assert res["analysis_mode"] == "rule_based"
+        assert res["purpose_mismatch"] is False
+        assert res["risk_level"] in {"High", "Medium"}
+        assert "PURPOSE COMPLIANT" in res["explanation"]
+
+
+def test_gemini_matching_purpose_falls_back_to_rule_based_on_rate_limit(monkeypatch):
+    """
+    Verify matching-purpose records fall back safely to rule-based engine and report
+    analysis_mode='rule_based' when process-local rate limiter refuses a request slot.
+    """
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "test-key-matching-rate-limit")
+    monkeypatch.setattr("app.core.config.settings.GEMINI_SKIP_IDENTICAL_PURPOSE", False)
+    from app.services.ai_service import _rate_limiter
+
+    with patch.object(_rate_limiter, "acquire", return_value=False):
+        with patch("httpx.Client.post") as mock_post:
+            res = AIService.analyze_record({
+                "record_id": "CUS-1001",
+                "category": "Customer",
+                "sensitivity": "Low",
+                "collection_purpose": "Order Processing",
+                "current_usage": "Order Processing",
+                "status": "Active",
+                "expiry_date": "2027-01-01"
+            })
+
+            assert not mock_post.called
+            assert res["analysis_mode"] == "rule_based"
+            assert res["purpose_mismatch"] is False
+            assert res["ai_recommendation"] == "KEEP"
+
+
+def test_gemini_endpoint_analyze_matching_purpose_returns_ai_assisted(monkeypatch):
+    """
+    End-to-end endpoint test: POST /api/data/{record_id}/analyze for an identical-purpose
+    record queries Gemini when GEMINI_SKIP_IDENTICAL_PURPOSE=False and returns ai_assisted.
+    """
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "test-key-endpoint-matching")
+    monkeypatch.setattr("app.core.config.settings.GEMINI_SKIP_IDENTICAL_PURPOSE", False)
+
+    db = TestingSessionLocal()
+    rec = DataRecordModel(
+        record_id="TST-MATCH-01",
+        data_type="Order Data",
+        category="Customer",
+        sensitivity="Medium",
+        collection_purpose="Order Fulfillment",
+        current_usage="Order Fulfillment",
+        owner="Logistics",
+        created_date="2025-01-01",
+        retention_period="2 years",
+        expiry_date="2027-01-01",
+        status="Active",
+        source="System"
+    )
+    db.merge(rec)
+    db.commit()
+    db.close()
+
+    mock_gemini_output = {
+        "purpose_mismatch": False,
+        "risk_level": "Low",
+        "ai_recommendation": "KEEP",
+        "explanation": "Live Gemini confirmed operational usage matches stated collection purpose."
+    }
+
+    with patch.object(GeminiAIProvider, "analyze", return_value=mock_gemini_output) as mock_analyze:
+        response = client.post("/api/data/TST-MATCH-01/analyze")
+        assert response.status_code == 200
+        data = response.json()
+        assert mock_analyze.called
+        assert data["record_id"] == "TST-MATCH-01"
+        assert data["analysis_mode"] == "ai_assisted"
+        assert data["purpose_mismatch"] is False
+        assert data["risk_level"] == "Low"
+        assert data["ai_recommendation"] == "KEEP"
+        assert "Live Gemini confirmed" in data["explanation"]
+
+
+def test_gemini_endpoint_analyze_matching_purpose_fallback_on_gemini_error(monkeypatch):
+    """
+    End-to-end endpoint test: POST /api/data/{record_id}/analyze gracefully returns HTTP 200
+    with analysis_mode='rule_based' when Gemini provider fails for a matching-purpose record.
+    """
+    monkeypatch.setattr("app.core.config.settings.GEMINI_API_KEY", "test-key-endpoint-matching-fail")
+    monkeypatch.setattr("app.core.config.settings.GEMINI_SKIP_IDENTICAL_PURPOSE", False)
+
+    db = TestingSessionLocal()
+    rec = DataRecordModel(
+        record_id="TST-MATCH-02",
+        data_type="Order Data",
+        category="Customer",
+        sensitivity="Medium",
+        collection_purpose="Order Fulfillment",
+        current_usage="Order Fulfillment",
+        owner="Logistics",
+        created_date="2025-01-01",
+        retention_period="2 years",
+        expiry_date="2027-01-01",
+        status="Active",
+        source="System"
+    )
+    db.merge(rec)
+    db.commit()
+    db.close()
+
+    with patch.object(GeminiAIProvider, "analyze", return_value=None):
+        response = client.post("/api/data/TST-MATCH-02/analyze")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["record_id"] == "TST-MATCH-02"
+        assert data["analysis_mode"] == "rule_based"
+        assert data["purpose_mismatch"] is False
+        assert data["ai_recommendation"] == "KEEP"

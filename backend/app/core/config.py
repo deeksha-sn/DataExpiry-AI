@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     GEMINI_TIMEOUT_SECONDS: float = 8.0  # HTTP request timeout in seconds
     GEMINI_CACHE_TTL_SECONDS: int = 3600  # In-memory cache TTL in seconds (1 hour)
     GEMINI_CACHE_MAX_ENTRIES: int = 1000  # Max cached assessments
-    GEMINI_SKIP_IDENTICAL_PURPOSE: bool = True  # Skip LLM call if purpose & usage are identical or placeholder
+    GEMINI_SKIP_IDENTICAL_PURPOSE: bool = False  # Skip LLM call if purpose & usage are identical or placeholder
 
     # Security Configuration
     ALLOW_DEV_HEADER_AUTH: bool = False  # Explicit opt-in required to allow header-based dev identity in development mode

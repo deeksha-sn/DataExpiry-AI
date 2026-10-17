@@ -1119,7 +1119,7 @@ class AIService:
 
         # 1. Try AI provider if configured and record is not eligible for deterministic shortcut
         ai_result = None
-        skip_identical = getattr(settings, "GEMINI_SKIP_IDENTICAL_PURPOSE", True)
+        skip_identical = getattr(settings, "GEMINI_SKIP_IDENTICAL_PURPOSE", False)
         norm_purpose = cls.normalize_text(collection_purpose)
         norm_usage = cls.normalize_text(current_usage)
         is_identical_purpose = bool(norm_purpose and norm_usage and norm_purpose == norm_usage)
@@ -1240,7 +1240,7 @@ class AIService:
         # If Gemini AI provider is available, batch evaluate items not yet cached
         if GeminiAIProvider.is_available() and rec_dicts:
             items_to_batch: List[Dict[str, Any]] = []
-            skip_identical = getattr(settings, "GEMINI_SKIP_IDENTICAL_PURPOSE", True)
+            skip_identical = getattr(settings, "GEMINI_SKIP_IDENTICAL_PURPOSE", False)
             for r_dict in rec_dicts:
                 # If identical purpose shortcut is enabled, eligible records bypass external batch call
                 if skip_identical:
