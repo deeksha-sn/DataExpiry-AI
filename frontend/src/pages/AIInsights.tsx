@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { apiService } from '../services/api';
 import { DataRecord, AIGovernanceSummary } from '../types';
 import {
@@ -27,7 +27,7 @@ import {
 export const AIInsights: React.FC = () => {
   const [records, setRecords] = useState<DataRecord[]>([]);
   const [summary, setSummary] = useState<AIGovernanceSummary | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [hasAnalyzed, setHasAnalyzed] = useState<boolean>(false);
   const [analyzingBatch, setAnalyzingBatch] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,39 +37,25 @@ export const AIInsights: React.FC = () => {
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [selectedRecord, setSelectedRecord] = useState<DataRecord | null>(null);
 
-  // Load Data
-  const fetchData = async () => {
-    setLoading(true);
+  // Run Batch AI Analysis explicitly triggered by user
+  const handleRunGlobalAudit = async () => {
+    if (analyzingBatch) return; // Prevent duplicate clicks
+    setAnalyzingBatch(true);
     setError(null);
+    setRecords([]); // Reset displayed results when user explicitly starts a fresh scan
+    setSummary(null);
     try {
+      await apiService.runBatchAiAnalysis();
       const [recordsData, summaryData] = await Promise.all([
         apiService.getDataRecords({ limit: 200 }),
         apiService.getAIGovernanceSummary().catch(() => null)
       ]);
       setRecords(recordsData);
       setSummary(summaryData);
+      setHasAnalyzed(true);
     } catch (err: any) {
-      console.error('Failed to load AI Insights data:', err);
-      setError(err.message || 'Failed to load records from backend.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  // Run Batch AI Analysis
-  const handleRunGlobalAudit = async () => {
-    setAnalyzingBatch(true);
-    setError(null);
-    try {
-      await apiService.runBatchAiAnalysis();
-      await fetchData();
-    } catch (err: any) {
-      console.error('Global AI Audit failed:', err);
-      setError(err.message || 'Global AI Audit failed');
+      console.error('AI Insights analysis failed:', err);
+      setError(err.message || 'AI Insights analysis failed. Please try again.');
     } finally {
       setAnalyzingBatch(false);
     }
@@ -189,11 +175,11 @@ export const AIInsights: React.FC = () => {
 
         <button
           onClick={handleRunGlobalAudit}
-          disabled={analyzingBatch || loading}
+          disabled={analyzingBatch}
           className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-sm shadow-lg shadow-purple-900/30 transition-all disabled:opacity-50"
         >
           <RefreshCw className={`w-4 h-4 ${analyzingBatch ? 'animate-spin' : ''}`} />
-          <span>{analyzingBatch ? 'Running Global AI Audit...' : 'Run Global AI Audit'}</span>
+          <span>{analyzingBatch ? 'Running AI Analysis...' : 'Run AI Analysis'}</span>
         </button>
       </div>
 
@@ -204,7 +190,7 @@ export const AIInsights: React.FC = () => {
             <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0" />
             <span className="text-sm font-mono">{error}</span>
           </div>
-          <button onClick={fetchData} className="text-xs underline hover:text-rose-200">
+          <button onClick={handleRunGlobalAudit} className="text-xs underline hover:text-rose-200">
             Retry
           </button>
         </div>
@@ -214,27 +200,37 @@ export const AIInsights: React.FC = () => {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
           <span className="text-xs font-mono text-slate-400">TOTAL ENTERPRISE ASSETS</span>
-          <div className="text-2xl font-bold text-slate-100">{loading ? '...' : totalCount}</div>
+          <div className="text-2xl font-bold text-slate-100">
+            {analyzingBatch ? '...' : !hasAnalyzed ? '-' : totalCount}
+          </div>
           <p className="text-[11px] text-slate-500 font-mono">Catalog records under AI surveillance</p>
         </div>
 
         <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
           <span className="text-xs font-mono text-purple-400">POTENTIAL MISMATCHES</span>
-          <div className="text-2xl font-bold text-purple-400">{loading ? '...' : mismatchCount}</div>
+          <div className="text-2xl font-bold text-purple-400">
+            {analyzingBatch ? '...' : !hasAnalyzed ? '-' : mismatchCount}
+          </div>
           <p className="text-[11px] text-slate-500 font-mono">
-            {totalCount ? Math.round((mismatchCount / totalCount) * 100) : 0}% of inventory flagged
+            {!hasAnalyzed
+              ? 'Awaiting AI analysis scan'
+              : `${totalCount ? Math.round((mismatchCount / totalCount) * 100) : 0}% of inventory flagged`}
           </p>
         </div>
 
         <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
           <span className="text-xs font-mono text-rose-400">HIGH-SENSITIVITY ASSETS</span>
-          <div className="text-2xl font-bold text-rose-400">{loading ? '...' : highSensitivityCount}</div>
+          <div className="text-2xl font-bold text-rose-400">
+            {analyzingBatch ? '...' : !hasAnalyzed ? '-' : highSensitivityCount}
+          </div>
           <p className="text-[11px] text-slate-500 font-mono">PII / Financial tier classifications</p>
         </div>
 
         <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
           <span className="text-xs font-mono text-amber-400">RECORDS IN REVIEW</span>
-          <div className="text-2xl font-bold text-amber-400">{loading ? '...' : reviewCount}</div>
+          <div className="text-2xl font-bold text-amber-400">
+            {analyzingBatch ? '...' : !hasAnalyzed ? '-' : reviewCount}
+          </div>
           <p className="text-[11px] text-slate-500 font-mono">Pending compliance signoff</p>
         </div>
       </div>
@@ -243,9 +239,15 @@ export const AIInsights: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* KEEP */}
         <div
-          onClick={() => setActiveRecommendationTab(activeRecommendationTab === 'KEEP' ? 'ALL' : 'KEEP')}
-          className={`p-5 rounded-xl border transition-all cursor-pointer group ${
-            activeRecommendationTab === 'KEEP'
+          onClick={() => {
+            if (hasAnalyzed) {
+              setActiveRecommendationTab(activeRecommendationTab === 'KEEP' ? 'ALL' : 'KEEP');
+            }
+          }}
+          className={`p-5 rounded-xl border transition-all ${
+            hasAnalyzed ? 'cursor-pointer group' : 'cursor-default opacity-80'
+          } ${
+            activeRecommendationTab === 'KEEP' && hasAnalyzed
               ? 'bg-emerald-950/40 border-emerald-500 ring-2 ring-emerald-500/20 shadow-lg shadow-emerald-950/50'
               : 'bg-slate-950 border-slate-800 hover:border-emerald-500/50'
           }`}
@@ -255,7 +257,7 @@ export const AIInsights: React.FC = () => {
             <CheckCircle2 className="w-5 h-5 text-emerald-400 group-hover:scale-110 transition-transform" />
           </div>
           <div className="text-3xl font-extrabold text-emerald-300 font-mono">
-            {loading ? '...' : keepCount}
+            {analyzingBatch ? '...' : !hasAnalyzed ? '-' : keepCount}
           </div>
           <p className="text-xs text-slate-400 mt-2 leading-relaxed">
             Active retention schedule and compliant collection purpose. No action needed.
@@ -268,9 +270,15 @@ export const AIInsights: React.FC = () => {
 
         {/* REVIEW */}
         <div
-          onClick={() => setActiveRecommendationTab(activeRecommendationTab === 'REVIEW' ? 'ALL' : 'REVIEW')}
-          className={`p-5 rounded-xl border transition-all cursor-pointer group ${
-            activeRecommendationTab === 'REVIEW'
+          onClick={() => {
+            if (hasAnalyzed) {
+              setActiveRecommendationTab(activeRecommendationTab === 'REVIEW' ? 'ALL' : 'REVIEW');
+            }
+          }}
+          className={`p-5 rounded-xl border transition-all ${
+            hasAnalyzed ? 'cursor-pointer group' : 'cursor-default opacity-80'
+          } ${
+            activeRecommendationTab === 'REVIEW' && hasAnalyzed
               ? 'bg-amber-950/40 border-amber-500 ring-2 ring-amber-500/20 shadow-lg shadow-amber-950/50'
               : 'bg-slate-950 border-slate-800 hover:border-amber-500/50'
           }`}
@@ -280,7 +288,7 @@ export const AIInsights: React.FC = () => {
             <Clock className="w-5 h-5 text-amber-400 group-hover:scale-110 transition-transform" />
           </div>
           <div className="text-3xl font-extrabold text-amber-300 font-mono">
-            {loading ? '...' : reviewCount}
+            {analyzingBatch ? '...' : !hasAnalyzed ? '-' : reviewCount}
           </div>
           <p className="text-xs text-slate-400 mt-2 leading-relaxed">
             Approaching expiration deadline or detected active usage drift requiring consent renewal.
@@ -293,9 +301,15 @@ export const AIInsights: React.FC = () => {
 
         {/* ANONYMIZE */}
         <div
-          onClick={() => setActiveRecommendationTab(activeRecommendationTab === 'ANONYMIZE' ? 'ALL' : 'ANONYMIZE')}
-          className={`p-5 rounded-xl border transition-all cursor-pointer group ${
-            activeRecommendationTab === 'ANONYMIZE'
+          onClick={() => {
+            if (hasAnalyzed) {
+              setActiveRecommendationTab(activeRecommendationTab === 'ANONYMIZE' ? 'ALL' : 'ANONYMIZE');
+            }
+          }}
+          className={`p-5 rounded-xl border transition-all ${
+            hasAnalyzed ? 'cursor-pointer group' : 'cursor-default opacity-80'
+          } ${
+            activeRecommendationTab === 'ANONYMIZE' && hasAnalyzed
               ? 'bg-sky-950/40 border-sky-500 ring-2 ring-sky-500/20 shadow-lg shadow-sky-950/50'
               : 'bg-slate-950 border-slate-800 hover:border-sky-500/50'
           }`}
@@ -305,7 +319,7 @@ export const AIInsights: React.FC = () => {
             <Lock className="w-5 h-5 text-sky-400 group-hover:scale-110 transition-transform" />
           </div>
           <div className="text-3xl font-extrabold text-sky-300 font-mono">
-            {loading ? '...' : anonymizeCount}
+            {analyzingBatch ? '...' : !hasAnalyzed ? '-' : anonymizeCount}
           </div>
           <p className="text-xs text-slate-400 mt-2 leading-relaxed">
             Expired high-sensitivity data. Scrub personal identifiers while retaining aggregate utility.
@@ -318,9 +332,15 @@ export const AIInsights: React.FC = () => {
 
         {/* DELETE */}
         <div
-          onClick={() => setActiveRecommendationTab(activeRecommendationTab === 'DELETE' ? 'ALL' : 'DELETE')}
-          className={`p-5 rounded-xl border transition-all cursor-pointer group ${
-            activeRecommendationTab === 'DELETE'
+          onClick={() => {
+            if (hasAnalyzed) {
+              setActiveRecommendationTab(activeRecommendationTab === 'DELETE' ? 'ALL' : 'DELETE');
+            }
+          }}
+          className={`p-5 rounded-xl border transition-all ${
+            hasAnalyzed ? 'cursor-pointer group' : 'cursor-default opacity-80'
+          } ${
+            activeRecommendationTab === 'DELETE' && hasAnalyzed
               ? 'bg-rose-950/40 border-rose-500 ring-2 ring-rose-500/20 shadow-lg shadow-rose-950/50'
               : 'bg-slate-950 border-slate-800 hover:border-rose-500/50'
           }`}
@@ -330,7 +350,7 @@ export const AIInsights: React.FC = () => {
             <Trash2 className="w-5 h-5 text-rose-400 group-hover:scale-110 transition-transform" />
           </div>
           <div className="text-3xl font-extrabold text-rose-300 font-mono">
-            {loading ? '...' : deleteCount}
+            {analyzingBatch ? '...' : !hasAnalyzed ? '-' : deleteCount}
           </div>
           <p className="text-xs text-slate-400 mt-2 leading-relaxed">
             Retention period lapsed and unlawful purpose mismatch. Mandatory data purge required.
@@ -342,8 +362,38 @@ export const AIInsights: React.FC = () => {
         </div>
       </div>
 
-      {/* Visual Analytics Strip: Category & Sensitivity & Risk Distribution */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {analyzingBatch ? (
+        <div className="p-12 text-center rounded-xl bg-slate-950 border border-slate-800 space-y-4">
+          <div className="inline-flex p-4 rounded-full bg-purple-950/50 border border-purple-800 text-purple-400">
+            <RefreshCw className="w-8 h-8 animate-spin" />
+          </div>
+          <h3 className="text-lg font-bold text-slate-100">Running AI Lifecycle Analysis...</h3>
+          <p className="text-sm text-slate-400 max-w-md mx-auto">
+            Evaluating data records against retention policies, detecting purpose drift with Gemini AI, and generating prescriptive governance recommendations.
+          </p>
+        </div>
+      ) : !hasAnalyzed ? (
+        <div className="p-12 text-center rounded-xl bg-slate-950 border border-slate-800 space-y-4">
+          <div className="inline-flex p-4 rounded-full bg-purple-950/40 border border-purple-800 text-purple-400">
+            <Brain className="w-8 h-8 text-purple-400" />
+          </div>
+          <h3 className="text-lg font-bold text-slate-100">No AI Analysis Generated Yet</h3>
+          <p className="text-sm text-slate-400 max-w-md mx-auto">
+            Click &ldquo;Run AI Analysis&rdquo; to evaluate catalog records, detect purpose drift, and generate prescriptive lifecycle recommendations with Gemini AI.
+          </p>
+          <button
+            onClick={handleRunGlobalAudit}
+            disabled={analyzingBatch}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-sm shadow-lg shadow-purple-900/30 transition-all"
+          >
+            <Sparkles className="w-4 h-4" />
+            <span>Run AI Analysis</span>
+          </button>
+        </div>
+      ) : (
+        <>
+          {/* Visual Analytics Strip: Category & Sensitivity & Risk Distribution */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Risk Distribution Matrix */}
         <div className="p-6 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
@@ -566,11 +616,7 @@ export const AIInsights: React.FC = () => {
 
         {/* Records Card Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {loading ? (
-            <div className="col-span-2 p-12 text-center text-slate-400 font-mono">
-              Loading AI records...
-            </div>
-          ) : filteredRecords.length === 0 ? (
+          {filteredRecords.length === 0 ? (
             <div className="col-span-2 p-12 text-center text-slate-500 font-mono border border-slate-800 rounded-xl bg-slate-950">
               No records found for the selected recommendation or search filter.
             </div>
@@ -670,6 +716,8 @@ export const AIInsights: React.FC = () => {
           )}
         </div>
       </div>
+        </>
+      )}
 
       {/* Record Details Modal */}
       {selectedRecord && (

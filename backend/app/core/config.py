@@ -25,6 +25,18 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.5-flash-lite"
 
+    # Gemini Free-Tier Optimization Settings (Quota: ~15 RPM)
+    GEMINI_RPM_LIMIT: int = 10  # Conservative process-local limit below ~15 RPM quota
+    GEMINI_RATE_LIMIT_RPM: int = 10  # Alias for rate limit RPM
+    GEMINI_MAX_RETRIES: int = 2  # Max retries on 429 / 503 errors
+    GEMINI_TIMEOUT_SECONDS: float = 8.0  # HTTP request timeout in seconds
+    GEMINI_CACHE_TTL_SECONDS: int = 3600  # In-memory cache TTL in seconds (1 hour)
+    GEMINI_CACHE_MAX_ENTRIES: int = 1000  # Max cached assessments
+    GEMINI_SKIP_IDENTICAL_PURPOSE: bool = False  # Skip LLM call if purpose & usage are identical or placeholder
+
+    # Security Configuration
+    ALLOW_DEV_HEADER_AUTH: bool = False  # Explicit opt-in required to allow header-based dev identity in development mode
+
     model_config = SettingsConfigDict(
         env_file=(Path(__file__).resolve().parent.parent.parent / ".env", ".env"),
         extra="ignore",
